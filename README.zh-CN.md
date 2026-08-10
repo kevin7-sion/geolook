@@ -133,15 +133,22 @@ python3 scripts/geo.py ui        # → http://127.0.0.1:8765
 
 ### 服务器/远程部署
 
-服务只绑定 `127.0.0.1`（刻意的安全边界，无认证体系）。要远程访问：
+服务默认只绑定 `127.0.0.1`。要远程访问，两种方式：
 
 ```bash
-# 推荐：SSH 隧道
+# 方式 A（推荐）：SSH 隧道，不暴露任何端口
 ssh -N -L 8765:127.0.0.1:8765 user@your-server
 # 然后本地浏览器打开 http://127.0.0.1:8765
+
+# 方式 B：绑定公网 + 访问令牌（两个变量缺一不可，不设令牌会拒绝启动）
+export GEOLOOK_TOKEN=$(openssl rand -hex 16)
+export GEOLOOK_HOST=0.0.0.0
+python3 scripts/geo.py ui
+# 浏览器首次访问输入令牌（或打开 http://server:8765/?token=令牌），
+# 之后凭 HttpOnly cookie 访问；API 调用带 X-Geolook-Token 头
 ```
 
-多人使用请自行加反向代理 + 认证（nginx basic auth / OAuth proxy 等）。`.env` 与 `work/` 含密钥和项目数据，注意文件权限。
+公网部署建议再套一层 HTTPS 反向代理（nginx/caddy），令牌走明文 HTTP 会被中间人看到。`.env` 与 `work/` 含密钥和项目数据，注意文件权限。
 
 ### 升级
 

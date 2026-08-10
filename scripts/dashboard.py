@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -231,11 +233,78 @@ def create_project(url: str, name: str, slug: str, market: str, max_pages: int) 
     return CLI.cmd_init(a)
 
 
+# ---------------------------------------------------------------- 访问令牌
+# 看板默认只绑 127.0.0.1；要暴露到公网（GEOLOOK_HOST=0.0.0.0）必须设 GEOLOOK_TOKEN。
+# 浏览器首次带 ?token= 访问后种 HttpOnly cookie（存摘要不存原文），之后正常访问；
+# API 调用也可带 X-Geolook-Token 头。
+
+AUTH_COOKIE = "glk_auth"
+
+
+def _token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def auth_ok(token: str | None, cookie_header: str | None,
+            query_token: str | None = None, header_token: str | None = None) -> bool:
+    """纯函数便于测试：任一凭证匹配即放行；未设 token 时全部放行。"""
+    if not token:
+        return True
+    for cand in (query_token, header_token):
+        if cand and hmac.compare_digest(cand, token):
+            return True
+    digest = _token_digest(token)
+    for part in (cookie_header or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == AUTH_COOKIE and v and hmac.compare_digest(v, digest):
+            return True
+    return False
+
+
+_LOGIN_HTML = """<!doctype html><meta charset="utf-8"><title>GeoLook</title>
+<body style="background:#131622;color:#e8eaf2;font-family:system-ui;display:flex;
+align-items:center;justify-content:center;height:100vh;margin:0">
+<form style="text-align:center" onsubmit="location='/?token='+encodeURIComponent(
+document.getElementById('t').value);return false">
+<div style="font-size:20px;margin-bottom:14px">Geo<span style="color:#9184d9">Look</span></div>
+<input id="t" type="password" placeholder="访问令牌 / Access token" autofocus
+style="background:#1b1e2e;border:1px solid #3a3f55;border-radius:8px;color:#e8eaf2;
+padding:10px 14px;font-size:14px;width:240px">
+<button style="background:#9184d9;border:0;border-radius:8px;color:#101223;
+padding:10px 18px;font-size:14px;margin-left:8px;cursor:pointer">进入</button>
+</form></body>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    TOKEN: str | None = None  # run() 注入；None = 不启用认证
 
     def log_message(self, *a):  # 静音访问日志
         pass
+
+    def _auth(self) -> bool:
+        """True=放行；False=已自行响应（401 或换 cookie 的 302）。"""
+        if not Handler.TOKEN:
+            return True
+        u = urlparse(self.path)
+        qt = (parse_qs(u.query).get("token") or [None])[0]
+        if qt and hmac.compare_digest(qt, Handler.TOKEN):
+            # 令牌换 cookie 后跳回干净地址，别让令牌留在地址栏和访问日志里
+            self.send_response(302)
+            self.send_header("Location", u.path or "/")
+            self.send_header("Set-Cookie", f"{AUTH_COOKIE}={_token_digest(Handler.TOKEN)}; "
+                                           "HttpOnly; SameSite=Strict; Path=/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return False
+        if auth_ok(Handler.TOKEN, self.headers.get("Cookie"),
+                   header_token=self.headers.get("X-Geolook-Token")):
+            return True
+        if self.command == "GET":
+            self._send(401, _LOGIN_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        else:
+            self._json({"error": "未授权：需要 X-Geolook-Token 头或先在浏览器登录"}, 401)
+        return False
 
     def _send(self, code, body: bytes, ctype="application/json; charset=utf-8"):
         self.send_response(code)
@@ -254,6 +323,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ GET
     def do_GET(self):
+        if not self._auth():
+            return
         u = urlparse(self.path)
         p, q = unquote(u.path), parse_qs(u.query)
         try:
@@ -432,6 +503,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ POST
     def do_POST(self):
+        if not self._auth():
+            return
         p = unquote(urlparse(self.path).path)
         try:
             body = self._body()
@@ -692,12 +765,20 @@ def _monitor_loop():
         time.sleep(1800)
 
 
-def run(port: int = 8765, open_browser: bool = True):
+def run(port: int = 8765, open_browser: bool = True,
+        host: str | None = None, token: str | None = None):
+    host = host or os.environ.get("GEOLOOK_HOST") or "127.0.0.1"
+    token = token or os.environ.get("GEOLOOK_TOKEN") or None
+    if host not in ("127.0.0.1", "localhost") and not token:
+        G.die(f"绑定到 {host} 会把看板暴露给网络上的所有人。"
+              "先设置访问令牌再启动：export GEOLOOK_TOKEN=$(openssl rand -hex 16)")
+    Handler.TOKEN = token
     J.reap_orphans()  # 回收上次服务留下的 running 僵尸记录，恢复并发保护
     threading.Thread(target=_monitor_loop, daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    url = f"http://127.0.0.1:{port}/"
-    G.info(f"看板已启动：{url}（Ctrl+C 退出）")
+    srv = ThreadingHTTPServer((host, port), Handler)
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}/"
+    G.info(f"看板已启动：{url}（Ctrl+C 退出）"
+           + ("，访问需令牌（GEOLOOK_TOKEN）" if token else ""))
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

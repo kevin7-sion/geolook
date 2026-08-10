@@ -109,13 +109,21 @@ python3 scripts/geo.py ui        # → http://127.0.0.1:8765
 
 ### Remote / server deployment
 
-The server binds to `127.0.0.1` only (a deliberate security boundary — there is no auth layer). For remote access:
+The server binds to `127.0.0.1` by default. Two ways to access it remotely:
 
 ```bash
+# Option A (recommended): SSH tunnel, no port exposed
 ssh -N -L 8765:127.0.0.1:8765 user@your-server   # then open http://127.0.0.1:8765 locally
+
+# Option B: public bind + access token (both required — refuses to start without a token)
+export GEOLOOK_TOKEN=$(openssl rand -hex 16)
+export GEOLOOK_HOST=0.0.0.0
+python3 scripts/geo.py ui
+# Enter the token on first visit (or open http://server:8765/?token=TOKEN);
+# afterwards access is via HttpOnly cookie. API calls: X-Geolook-Token header.
 ```
 
-For multi-user setups put a reverse proxy with auth in front. `.env` and `work/` contain secrets and project data — mind file permissions.
+For public deployments put an HTTPS reverse proxy (nginx/caddy) in front — a token over plain HTTP can be intercepted. `.env` and `work/` contain secrets and project data — mind file permissions.
 
 ### Upgrading
 
