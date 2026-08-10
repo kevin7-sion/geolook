@@ -113,6 +113,7 @@ def analyze_page(url: str, res: dict) -> dict:
         "url": url,
         "final_url": res["final_url"],
         "status": res["status"],
+        "ua_fallback": res.get("ua_fallback", False),
         "error": res["error"],
         "title": (soup.title.get_text(" ", strip=True) if soup.title else ""),
         "meta_description": (desc.get("content", "") if desc else ""),
@@ -223,6 +224,37 @@ def check_llms_txt(root: str, llms_txt: str, robots_txt: str) -> dict | None:
             "broken": broken, "robots_blocked": robots_blocked}
 
 
+def _crawl_failure_hint(pages: list[dict]) -> str:
+    """按失败形态给出针对性排查指引：403 和 SSL 错误的排查路径完全不同，
+    「浏览器能打开」恰恰说明拦的是脚本而不是站点挂了。"""
+    from collections import Counter
+
+    statuses = Counter(p["status"] for p in pages)
+    errors = Counter((p.get("error") or "").split(":")[0].strip()
+                     for p in pages if p.get("error"))
+    dist = "、".join(f"{'HTTP ' + str(s) if s else '未连通'}×{n}"
+                    for s, n in statuses.most_common())
+    lines = [f"状态分布：{dist}"]
+    sample = next((p.get("error") for p in pages if p.get("error")), None)
+    if sample:
+        lines.append(f"错误样例：{sample[:120]}")
+
+    n = len(pages)
+    if statuses.get(403, 0) + statuses.get(406, 0) >= n * 0.8:
+        lines.append("→ 浏览器能打开但脚本被拦，典型是 WAF/CDN 拦截（Cloudflare Bot "
+                     "Fight、宝塔/安全狗防火墙等）。把抓取机 IP 加白名单，或临时放行工具 UA。"
+                     "注意：这套规则很可能同样拦住 AI 引擎的抓取器——这本身就是要修的 GEO 问题")
+    elif "SSLError" in errors:
+        lines.append("→ TLS 证书链问题：浏览器会自动补中间证书，Python 不会。"
+                     "用 https://www.ssllabs.com/ssltest/ 检查并补齐中间证书（Chain issues）")
+    elif "ConnectionError" in errors or "ConnectTimeout" in errors or "ReadTimeout" in errors:
+        lines.append("→ 网络层不通：确认抓取机能解析该域名（DNS）、目标站是否只对特定地区开放、"
+                     "防火墙是否放行出站 443")
+    elif statuses.get(401, 0) + statuses.get(302, 0) >= n * 0.8:
+        lines.append("→ 站点要求登录/跳转：AI 抓取器同样进不去，需要提供可公开访问的页面")
+    return "\n".join(lines)
+
+
 def check_crawl_health(pages: list[dict]):
     """抓取全灭（目标站挂掉/被 WAF 拦）时直接终止流水线：
     失败页 status=0 照样进均分，会产出「均分 3 分」的误导报告。"""
@@ -230,9 +262,9 @@ def check_crawl_health(pages: list[dict]):
         return
     ok = sum(1 for p in pages if p["status"] == 200)
     if ok == 0:
-        G.die("抓取失败：没有页面返回 200，检查站点可达性/WAF")
+        G.die("抓取失败：没有页面返回 200。\n" + _crawl_failure_hint(pages))
     if len(pages) >= 5 and ok / len(pages) < 0.2:
-        G.die(f"抓取失败：仅 {ok}/{len(pages)} 页可访问（<20%），检查 WAF/反爬")
+        G.die(f"抓取失败：仅 {ok}/{len(pages)} 页可访问（<20%）。\n" + _crawl_failure_hint(pages))
 
 
 def run(slug: str, max_pages: int | None = None, delay: float = 0.5) -> dict:
@@ -316,7 +348,11 @@ def run(slug: str, max_pages: int | None = None, delay: float = 0.5) -> dict:
         "llms_txt_check": llms_check,
         "pages_crawled": len(pages),
         "pages_ok": sum(1 for p in pages if p["status"] == 200),
+        "ua_fallback_pages": sum(1 for p in pages if p.get("ua_fallback")),
     }
+    if site["ua_fallback_pages"]:
+        G.info(f"注意：{site['ua_fallback_pages']} 页是换纯浏览器 UA 才抓到的——"
+               "WAF 在拦带工具标记的抓取，AI 引擎的爬虫很可能同样被拦，建议加白名单")
     G.write_json(outdir / "site.json", site)
     G.write_jsonl(outdir / "pages.jsonl", pages)
     G.info(f"完成：{site['pages_ok']}/{len(pages)} 页可访问 → {outdir}")

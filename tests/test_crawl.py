@@ -53,6 +53,32 @@ class TestFetchRetry(unittest.TestCase):
         self.assertEqual(res["status"], 500)
         self.assertEqual(calls, 2)
 
+    def test_403_falls_back_to_browser_ua(self):
+        with mock.patch.object(G.requests, "get",
+                               side_effect=[FakeResp(403), FakeResp(200)]) as get, \
+             mock.patch.object(G.time, "sleep"):
+            res = G.fetch("http://x.test/", retries=0)
+        self.assertEqual(res["status"], 200)
+        self.assertTrue(res["ua_fallback"])
+        uas = [c.kwargs["headers"]["User-Agent"] for c in get.call_args_list]
+        self.assertIn("geo-skill", uas[0])
+        self.assertNotIn("geo-skill", uas[1])
+
+    def test_403_on_both_uas_returns_403(self):
+        with mock.patch.object(G.requests, "get",
+                               side_effect=[FakeResp(403), FakeResp(403)]) as get, \
+             mock.patch.object(G.time, "sleep"):
+            res = G.fetch("http://x.test/", retries=0)
+        self.assertEqual(res["status"], 403)
+        self.assertEqual(get.call_count, 2)
+
+    def test_explicit_ua_never_falls_back(self):
+        with mock.patch.object(G.requests, "get", side_effect=[FakeResp(403)]) as get, \
+             mock.patch.object(G.time, "sleep"):
+            res = G.fetch("http://x.test/", retries=0, ua="AI-Bot/1.0")
+        self.assertEqual(res["status"], 403)
+        self.assertEqual(get.call_count, 1)
+
 
 class TestCrawlHealth(unittest.TestCase):
     def _pages(self, statuses):
@@ -68,6 +94,17 @@ class TestCrawlHealth(unittest.TestCase):
 
     def test_healthy_passes(self):
         crawl.check_crawl_health(self._pages([200] * 5))
+
+    def test_failure_hint_names_waf_on_403(self):
+        hint = crawl._crawl_failure_hint([{"status": 403}] * 5)
+        self.assertIn("HTTP 403×5", hint)
+        self.assertIn("WAF", hint)
+
+    def test_failure_hint_names_tls_on_sslerror(self):
+        hint = crawl._crawl_failure_hint(
+            [{"status": 0, "error": "SSLError: certificate verify failed"}] * 3)
+        self.assertIn("证书", hint)
+        self.assertIn("SSLError", hint)
         crawl.check_crawl_health(self._pages([200] + [0] * 4))  # 20% 刚好达标
 
 

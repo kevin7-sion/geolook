@@ -42,6 +42,12 @@ UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 geo-skill/1.0"
 )
+# 403/406 回退用：不带 geo-skill 标记的纯浏览器 UA。很多 WAF 规则只拦
+# 「带工具标记的 UA」，回退能区分「拦工具」还是「拦 IP」，这本身是诊断信号。
+UA_BROWSER = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 # ---------------------------------------------------------------- 基础工具
 
@@ -192,13 +198,21 @@ def fetch(url: str, timeout: int = 12, retries: int = 1, ua: str | None = None) 
         return {"url": url, "final_url": url, "status": 0, "html": "", "content_type": "",
                 "x_robots_tag": "", "elapsed": 0, "error": "跳过：不是网页（下载/媒体/静态资源）"}
     last = ""
-    for attempt in range(retries + 1):
+    # 调用方没指定 UA 时，默认 UA 被 403/406 拦截后换纯浏览器 UA 再试一轮：
+    # 站长在自己站上做诊断，绕过自家 WAF 的工具规则是合理的，且结果会标注出来
+    ua_plan = [ua or UA] + ([UA_BROWSER] if ua is None else [])
+    for ua_idx, cur_ua in enumerate(ua_plan):
+      for attempt in range(retries + 1):
         try:
             t0 = time.time()
+            headers = {"User-Agent": cur_ua, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+            if ua_idx > 0:
+                headers["Accept"] = ("text/html,application/xhtml+xml,application/xml;"
+                                     "q=0.9,image/avif,image/webp,*/*;q=0.8")
             r = requests.get(
                 url,
                 timeout=timeout,
-                headers={"User-Agent": ua or UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+                headers=headers,
                 allow_redirects=True,
                 stream=True,
             )
@@ -207,6 +221,11 @@ def fetch(url: str, timeout: int = 12, retries: int = 1, ua: str | None = None) 
                 r.close()
                 time.sleep(1.5)
                 continue
+            # 默认 UA 被拦（403/406 是 WAF 的典型手势）→ 跳出内层，换浏览器 UA
+            if r.status_code in (403, 406) and ua_idx + 1 < len(ua_plan):
+                r.close()
+                last = f"HTTP {r.status_code}（默认 UA 被拦）"
+                break
             ctype = r.headers.get("Content-Type", "")
             xrobots = r.headers.get("X-Robots-Tag", "")
             if ctype and not any(k in ctype.lower() for k in ("html", "text/plain", "xml")):
@@ -236,6 +255,7 @@ def fetch(url: str, timeout: int = 12, retries: int = 1, ua: str | None = None) 
                 "x_robots_tag": xrobots,
                 "elapsed": round(time.time() - t0, 2),
                 "error": None,
+                "ua_fallback": ua_idx > 0,
             }
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {e}"
