@@ -36,7 +36,12 @@ RE_HOWTO = re.compile(r"(第[一二三四五六七八九十\d]+步|步骤\s*[一
 RE_HOWTO_SOFT = re.compile(r"(如何|怎么)")
 # 登录/注册/购物车/联系页等功能页天然低内容，不按 SPA 空壳 P0 误报
 FUNC_PAGE = re.compile(r"/(login|signin|signup|register|cart|checkout|account|auth|contact)(/|$)", re.I)
-RE_FAQ = re.compile(r"(常见问题|常见疑问|问答|よくある質問|\bFAQ\b|^\s*[问Q][:：]|答[:：])", re.I | re.M)
+RE_FAQ = re.compile(
+    r"(常见问题|常见疑问|常见问答|问答|よくある質問|\bFAQ\b"
+    r"|\bfrequently\s+asked\s+questions?\b|\bcommon\s+questions?\b"
+    r"|\bquestions?\s*(?:and|&)\s*answers?\b|\bq\s*(?:&|and)\s*a\b"
+    r"|^\s*[问Q][:：]|答[:：])", re.I | re.M
+)
 RE_DATE = re.compile(r"(20\d{2}[-/年]\s?\d{1,2}[-/月]\s?\d{1,2}|更新[于时间]*[:：]?\s*20\d{2}|最后更新|发布于|\bupdated\b|\bpublished\b)", re.I)
 RE_AUTHOR = re.compile(r"(作者|撰文|编辑[:：]|著者|執筆|\bauthor\b|\bby\s+[A-Z][a-z]+)", re.I)
 

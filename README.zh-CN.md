@@ -119,6 +119,10 @@ python3 scripts/geo.py ui        # → http://127.0.0.1:8765
 
 **一个 Key 都不配也能用**：自动采样会跳过，改用「导出人工采样表 → 人工/浏览器采样 → 回灌」的流程；抓站、体检、工单、资产等功能不依赖任何 Key。配一个国内引擎 Key（如 DeepSeek/GLM）即可解锁「自动推导问题库/品牌事实」和「AI 初稿」。
 
+### 自定义 OpenAI 兼容 API
+
+在「设置 → 引擎与密钥」中选择「自定义 OpenAI 兼容 API」，填写显示名称、API Base URL、Chat Completions 路径、模型名、API Key 和采样市场即可绑定自建、代理或第三方端点。路径可填 `chat/completions` 或 `v1/chat/completions`；密钥只保存在本机 `.env`，不会写入项目数据或 Git。
+
 ### 服务器/远程部署
 
 服务只绑定 `127.0.0.1`（刻意的安全边界，无认证体系）。要远程访问：
@@ -218,7 +222,15 @@ python3 scripts/geo.py sample-import --slug <项目> --file <采样表>
 - **单机自托管**：标准库 `http.server` 只绑 127.0.0.1；无数据库无账号，数据即文件
 - **宁缺毋滥**：品牌事实只从官网正文抽取，抽不到标「待确认」；竞品严禁发明名字；AI 初稿必须过 lint 并人工核实
 - **验收即产品**：能自动判定的绝不靠人回填
-- **发布永远手动**：渠道凭证在本地 `.env`（权限 600），每次发布人工点击确认；公众号/WordPress 只进草稿箱
+- **发布永远手动**：渠道凭证在本地 `.env`（权限 600），每次发布人工点击确认；公众号/WordPress/WisGate CMS 只进草稿箱
+
+### 导入 WisGate CMS 草稿
+
+在看板进入「设置 → 发布渠道 → WisGate CMS → 配置」，在密码输入框填写 `WISGATE_CMS_TOKEN` 并保存。默认使用 Directus 风格接口：API 地址 `https://cms.wisgate.ai`、集合 `blogs`。每次导入会写入 `status=draft`、`title`、`slug`、`summary`、`content`、`publish_time`、`tags` 和 `platform=wisdom-gate`；`model` 默认保持空白。摘要从正文首段提取，并限制在 240 个字符内以适配 CMS 字段；标签从标题和小节自动生成至少 3 个英文相关关键词，首个标签来自标题中的主关键词。标签字段为 JSON 时选 `json`，普通文本列时选 `csv`。封面图没有可靠的文件 ID 时留空；有 Directus 文件 ID 时填写 `cover_image_value`，不要填造出的图片链接。WisGate CMS 的 `content` 是 Markdown 富文本字段，GeoLook 会固定以 `markdown` 推送；旧配置中的 `html` 会自动迁移，避免在正文中显示 HTML 标签。
+
+随后在「内容工作台」打开已发布为成稿的文章，点「发布到渠道 → WisGate CMS」，确认后只会创建 CMS 草稿，不会自动对外发布。Token 仅写入本机 `.env`，看板不回显，发布记录也不会保存 Token。
+
+推送前会先打开发布审核窗口，展示标题、Summary、Slug、Status、Platform、Model、正文格式/字数和 3 个展开的关键词输入框。系统会针对当前成稿重新检查风险，并显示风险等级、章节、行号和原文片段。你可以返回修改，也可以保持原样；点击「确认并创建 CMS 草稿」后，只有确认过的 3 个标签才会随正文提交。
 
 ## 与 Claude Code 集成（可选）
 

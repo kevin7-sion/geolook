@@ -419,9 +419,16 @@ def precheck(text: str) -> dict:
     body = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     wc = G.word_count(body)
     h2 = len(re.findall(r"^##\s|^<h2", body, re.M))
+    # A visible "待确认：3 个指标" is honest, but it is not a numeric fact and
+    # must not make the content pass the evidence-oriented extraction check.
+    verified_numbers = sum(
+        len(A.RE_NUMBER.findall(line))
+        for line in body.splitlines()
+        if not re.search(r"待确认|待补|\bTBD\b|to be confirmed", line, re.I)
+    )
     blocks = {
         "定义": bool(A.RE_DEFINITION.search(body)),
-        "数字事实": len(A.RE_NUMBER.findall(body)) >= 3,
+        "数字事实": verified_numbers >= 3,
         "对比": bool(A.RE_COMPARE.search(body)) or bool(re.search(r"^\|.*\|$", body, re.M)),
         "操作步骤": bool(A.RE_HOWTO.search(body)),
         "FAQ": bool(A.RE_FAQ.search(body)),
@@ -433,4 +440,5 @@ def precheck(text: str) -> dict:
     checks = [{"t": f"「{k}」块", "ok": v, "lift": BLOCK_LIFT[k]} for k, v in blocks.items()]
     checks.insert(0, {"t": f"正文 {wc} 词（门槛 1000）", "ok": wc >= 1000, "lift": ""})
     checks.insert(1, {"t": f"H2 小节 {h2} 个（目标 ≥6）", "ok": h2 >= 6, "lift": ""})
-    return {"grade": grade, "wc": wc, "h2": h2, "blocks": blocks, "checks": checks}
+    return {"grade": grade, "wc": wc, "h2": h2, "blocks": blocks,
+            "verified_numbers": verified_numbers, "checks": checks}

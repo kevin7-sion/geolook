@@ -30,6 +30,7 @@ import jobs as J
 import tasks as T
 
 UI = Path(__file__).resolve().parent / "ui.html"
+FAVICON = Path(__file__).resolve().parent.parent / "docs" / "logo.png"
 
 
 # ---------------------------------------------------------------- 数据聚合
@@ -131,7 +132,14 @@ def workbench(slug: str, qid: str) -> dict:
         for f in sorted(cdir.glob("*.md")):
             if qid and qid in f.read_text("utf-8", "replace")[:800]:
                 sources.append({"kind": "content", "path": f.name})
-    for kind, sub in (("draft", "drafts"), ("outline", "outlines")):
+    draft = pdir / "assets" / "drafts" / f"{qid}.md"
+    if draft.exists():
+        sources.append({"kind": "draft", "path": f"drafts/{qid}.md"})
+    history = pdir / "assets" / "history" / "drafts"
+    if history.exists():
+        for f in sorted(history.glob(f"{qid}-*.md"), reverse=True):
+            sources.append({"kind": "history", "path": f"history/drafts/{f.name}"})
+    for kind, sub in (("outline", "outlines"),):
         f = pdir / "assets" / sub / f"{qid}.md"
         if f.exists():
             sources.append({"kind": kind, "path": f"{sub}/{qid}.md"})
@@ -233,6 +241,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if p in ("/", "/index.html"):
                 return self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
+            if p == "/favicon.png":
+                if not FAVICON.is_file():
+                    return self._send(404, b"not found", "text/plain")
+                return self._send(200, FAVICON.read_bytes(), "image/png")
             if p == "/api/projects":
                 return self._json(list_projects())
             if p == "/api/actions":
@@ -255,19 +267,33 @@ class Handler(BaseHTTPRequestHandler):
             if p.startswith("/api/workbench/"):
                 slug = p[len("/api/workbench/"):]
                 return self._json(workbench(slug, q.get("qid", [""])[0]))
+            if p.startswith("/api/assistant/"):
+                import assistant as A
+                return self._json(A.context(p[len("/api/assistant/"):]))
             if p == "/api/keys":
                 import sample as S
                 rows = []
                 for code, spec in S.PROVIDERS.items():
                     key = os.environ.get(spec["key_env"], "")
                     menv = spec.get("model_env")
-                    rows.append({"code": code, "label": spec["name"], "market": spec["market"],
+                    benv, nenv, market_env, penv = (spec.get("base_env"), spec.get("name_env"),
+                                                    spec.get("market_env"), spec.get("path_env"))
+                    rows.append({"code": code, "label": S.label_of(code), "market": S.market_of(code),
                                  "search": spec.get("search", False), "env": spec["key_env"],
                                  "ok": S.available(code),
                                  "key_tail": key[-4:] if len(key) >= 8 else "",
                                  "model": os.environ.get(menv) or spec.get("model", "") if menv else spec.get("model", ""),
                                  "model_env": menv,
                                  "model_set": bool(menv and os.environ.get(menv)),
+                                 "base": os.environ.get(benv) or spec.get("base", "") if benv else spec.get("base", ""),
+                                 "base_env": benv,
+                                 "base_set": bool(benv and os.environ.get(benv)),
+                                 "path": os.environ.get(penv) or spec.get("path", "") if penv else spec.get("path", ""),
+                                 "path_env": penv,
+                                 "path_set": bool(penv and os.environ.get(penv)),
+                                 "name_env": nenv,
+                                 "name_set": bool(nenv and os.environ.get(nenv)),
+                                 "market_env": market_env,
                                  "note": spec.get("note", "")})
                 for code, (label, mk) in S.MANUAL_ONLY.items():
                     rows.append({"code": code, "label": label, "market": mk,
@@ -396,10 +422,26 @@ class Handler(BaseHTTPRequestHandler):
 
             if p.startswith("/api/config/"):
                 slug = p[len("/api/config/"):]
-                cur = G.read_json(G.project_dir(slug) / "geo.json", {})
-                cur.update(body)          # 整体覆盖字段，前端传完整对象
-                G.save_config(slug, cur)
-                return self._json({"ok": True})
+                if not isinstance(body, dict):
+                    return self._json({"ok": False, "error": "配置必须是对象"}, 400)
+                p_cfg = G.project_dir(slug) / "geo.json"
+                if not p_cfg.is_file():
+                    return self._json({"ok": False, "error": "项目配置不存在"}, 404)
+                if "brand" in body:
+                    brand = body["brand"]
+                    if not isinstance(brand, dict) or not str(brand.get("name") or "").strip():
+                        return self._json({"ok": False, "error": "品牌名不能为空"}, 400)
+                if "market" in body and body["market"] not in ("cn", "global", "both"):
+                    return self._json({"ok": False, "error": "市场只能是 cn、global 或 both"}, 400)
+                # 配置页、周期任务和后台任务可能同时写 geo.json，须锁住读改写周期。
+                with G.project_lock(slug):
+                    cur = G.read_json(p_cfg, None)
+                    if not isinstance(cur, dict):
+                        return self._json({"ok": False, "error": "项目配置已损坏，请从备份恢复"}, 409)
+                    cur.update(body)          # 前端提交完整品牌对象；未提交字段保留
+                    G.save_config(slug, cur)
+                return self._json({"ok": True, "config": {"brand": cur.get("brand", {}),
+                                                              "market": cur.get("market", "cn")}})
 
             if p.startswith("/api/facts/"):
                 slug = p[len("/api/facts/"):]
@@ -423,6 +465,36 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/precheck":
                 import analytics
                 return self._json(analytics.precheck(body.get("text", "")))
+
+            if p.startswith("/api/research/"):
+                import research
+                slug = p[len("/api/research/"):]
+                text = body.get("text", "")
+                market = body.get("market", "global")
+                if not isinstance(text, str):
+                    return self._json({"ok": False, "error": "正文必须是文本"}, 400)
+                if market not in ("cn", "global", "both"):
+                    return self._json({"ok": False, "error": "市场参数无效"}, 400)
+                return self._json(research.resolve(slug, text, market))
+
+            if p.startswith("/api/assistant/"):
+                import assistant as A
+                slug = p[len("/api/assistant/"):]
+                message = body.get("message", "")
+                if not isinstance(message, str) or not message.strip():
+                    return self._json({"ok": False, "error": "请输入问题"}, 400)
+                return self._json(A.ask(slug, message.strip()))
+
+            if p.startswith("/api/draft-repair/"):
+                slug = p[len("/api/draft-repair/"):]
+                text = body.get("text", "")
+                market = body.get("market", "cn")
+                if not isinstance(text, str):
+                    return self._json({"ok": False, "error": "正文必须是文本"}, 400)
+                if market not in ("cn", "global", "both"):
+                    return self._json({"ok": False, "error": "市场参数无效"}, 400)
+                import generate
+                return self._json(generate.complete_extract_blocks(slug, text, market))
 
             if p.startswith("/api/factcheck/"):
                 slug = p[len("/api/factcheck/"):]
@@ -451,8 +523,9 @@ class Handler(BaseHTTPRequestHandler):
                 allowed = set()
                 for spec in S.PROVIDERS.values():
                     allowed.add(spec["key_env"])
-                    if spec.get("model_env"):
-                        allowed.add(spec["model_env"])
+                    for env_name in ("model_env", "base_env", "path_env", "name_env", "market_env"):
+                        if spec.get(env_name):
+                            allowed.add(spec[env_name])
                 for spec in P.PUBLISHERS.values():
                     allowed.update(spec["env"])
                 updates = body.get("updates")
@@ -465,6 +538,20 @@ class Handler(BaseHTTPRequestHandler):
                 clean = {k: str(v or "").strip() for k, v in updates.items()}
                 if any("\n" in v or "\r" in v for v in clean.values()):
                     return self._json({"ok": False, "error": "值不能包含换行"}, 400)
+                for key in ("OPENAI_BASE_URL", "CUSTOM_API_BASE_URL"):
+                    value = clean.get(key, "")
+                    if value and not re.fullmatch(r"https?://[^\s]+", value):
+                        return self._json({"ok": False, "error": f"{key} 必须是 http(s) 地址"}, 400)
+                value = clean.get("CUSTOM_API_CHAT_PATH", "")
+                if value and ("\\" in value or "'" in value or "://" in value or ".." in value
+                              or value.startswith("/") or value.endswith("/")):
+                    return self._json({"ok": False, "error": "CUSTOM_API_CHAT_PATH 只能是相对路径，例如 v1/chat/completions"}, 400)
+                value = clean.get("CUSTOM_API_MARKET", "")
+                if value and value not in ("cn", "global"):
+                    return self._json({"ok": False, "error": "CUSTOM_API_MARKET 只能是 cn 或 global"}, 400)
+                value = clean.get("CUSTOM_API_NAME", "")
+                if value and len(value) > 60:
+                    return self._json({"ok": False, "error": "自定义引擎名称不能超过 60 个字符"}, 400)
                 write_env(clean)
                 return self._json({"ok": True})
 
@@ -482,12 +569,19 @@ class Handler(BaseHTTPRequestHandler):
                 G.save_config(slug, cfg)
                 return self._json({"ok": True})
 
+            if p.startswith("/api/publish-preview/"):
+                import publish as P
+                slug = p[len("/api/publish-preview/"):]
+                result = P.preview(slug, body.get("platform", ""), body.get("path", ""),
+                                   body.get("title", ""))
+                return self._json(result, 200 if result.get("ok") else 400)
+
             if p.startswith("/api/publish/"):
                 # 发布 = 外发动作：只响应界面上用户的明确点击，服务端绝不自行调用
                 import publish as P
                 slug = p[len("/api/publish/"):]
                 r = P.publish(slug, body.get("platform", ""), body.get("path", ""),
-                              body.get("title", ""))
+                              body.get("title", ""), body.get("options"))
                 return self._json(r, 200 if r.get("ok") else 400)
 
             if p.startswith("/api/distribution/"):
