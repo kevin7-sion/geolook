@@ -46,7 +46,7 @@ Four stages plus operations, all in one self-hosted dashboard:
 
 ![Channel map](docs/screenshots-en/channels.png)
 
-**Action** — Structured tickets (rationale / owner / effort / window / acceptance criteria) with "first-measured → current → target" progress bars and automatic reopening on regressions; a **content workbench** (topic pool sorted by "not mentioned + no content", required extraction blocks and brand facts at hand, live citability pre-check, fabrication-risk lint for AI drafts, and a **distribution checklist** matching each piece to its target channels); **deploy assets** (llms.txt, JSON-LD, HTML snippets, each labeled with its destination, plus a DEPLOY.md runbook); **publishing** to GitHub / WordPress drafts / WeChat OA drafts / webhook — always manually confirmed.
+**Action** — Structured tickets (rationale / owner / effort / window / acceptance criteria) with "first-measured → current → target" progress bars and automatic reopening on regressions; a **content workbench** (topic pool sorted by "not mentioned + no content", required extraction blocks and brand facts at hand, live citability pre-check, fabrication-risk lint for AI drafts, and a **distribution checklist** matching each piece to its target channels); **deploy assets** (llms.txt, JSON-LD, HTML snippets, each labeled with its destination, plus a DEPLOY.md runbook); **publishing** to GitHub / WordPress drafts / WeChat OA drafts / WisGate CMS drafts / webhook — always manually confirmed.
 
 ![Action plan](docs/screenshots-en/plan.png)
 ![Workbench](docs/screenshots-en/workbench.png)
@@ -97,6 +97,10 @@ python3 scripts/geo.py ui        # → http://127.0.0.1:8765
 ```
 
 **Zero keys works too**: automated sampling is skipped; use the manual sampling sheet loop instead. Crawling, auditing, tickets and assets need no keys. One CN-capable key (e.g. DeepSeek/GLM) unlocks auto-derivation of the question bank / brand facts and AI first drafts.
+
+### Custom OpenAI-compatible API
+
+In **Settings → Engines & Keys**, select **Custom OpenAI-compatible API** and provide a display name, API base URL, Chat Completions path, model, API key, and sampling market to bind a self-hosted, proxy, or third-party endpoint. The path can be `chat/completions` or `v1/chat/completions`. The key stays in the local `.env` and is never written to project data or Git.
 
 ### Remote / server deployment
 
@@ -183,7 +187,23 @@ All six audit dimensions are anchored in public empirical data; `scripts/audit.p
 - **Single-machine, self-hosted**: stdlib `http.server` on 127.0.0.1; no DB, no accounts; data is plain files
 - **Never fabricate**: facts only from site copy; inventing competitor names is forbidden; AI drafts must pass lint + human review
 - **Verification is the product**: anything auto-verifiable never relies on someone saying "done"
-- **Publishing is always manual**: channel credentials in local `.env` (mode 600); every publish is an explicit click; WeChat/WordPress go to drafts only
+- **Publishing is always manual**: channel credentials in local `.env` (mode 600); every publish is an explicit click; WeChat/WordPress/WisGate CMS go to drafts only
+
+### WisGate CMS drafts
+
+To import a final article into a WisGate CMS draft, open **Settings → Publishing channels → WisGate CMS → Configure**. Enter `WISGATE_CMS_TOKEN` in the password field, save it, then set the API and field mapping if your CMS schema differs from the defaults:
+
+- API base URL: `https://cms.wisgate.ai`
+- Collection: `blogs`
+- Default draft fields: `status=draft`, `title`, `slug`, `summary`, `content`, `publish_time`, `tags`, and `platform=wisdom-gate`
+- Body format: WisGate CMS always receives `markdown` because `content` uses its Markdown rich-text interface. Older local `html` settings are migrated automatically so raw tags are never displayed.
+- Tags: exactly three English topical tags are derived from the title and headings and reviewed before submission; use `json` for a JSON field or `csv` for a text field
+- Cover image: leave it blank, or enter a Directus file ID in `cover_image_value`; GeoLook never invents an image URL
+- Model: left blank by default
+
+In the Content Workbench, open a final article and choose **Publish to channels → WisGate CMS**. The explicit confirmation creates a CMS draft only; review and publish it from the CMS. The token is stored only in your local `.env`, is never displayed by the dashboard, and is not written to publish history.
+
+Before the CMS request, GeoLook opens a no-side-effect publish review. It shows the title, summary, slug, status, platform, model, Markdown length, and exactly three short phrase tags in separate fields. It also re-checks the exact article and locates manual-review risks by section, line, and excerpt. You can edit the tags, keep the article unchanged, or return to the workbench; only the confirmed list is sent when you choose **Confirm and create CMS draft**.
 
 ## Claude Code integration (optional)
 

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GeoLook · 生成式引擎优化平台</title>
+<link rel="icon" type="image/png" href="/favicon.png">
 <style>
 /* Nocturne 设计系统令牌（取自设计稿 styles.css，暗色单主题） */
 :root{
@@ -95,6 +96,13 @@ pre.log{background:var(--deep);border-radius:var(--r-md);box-shadow:var(--sh-sm)
 .modal{position:fixed;inset:0;background:rgba(41,43,49,.6);display:grid;place-items:center;z-index:60;padding:24px}
 .modal .box{background:var(--surface);border-radius:var(--r-lg);padding:22px 24px;max-width:620px;width:100%;
   box-shadow:var(--sh-md);max-height:88vh;overflow:auto}
+.modal .box:has(#assistant-pop){max-width:980px;padding:0;overflow:hidden}
+#assistant-fab{position:fixed;right:22px;bottom:22px;z-index:55;width:54px;height:54px;padding:0;border-radius:50%;
+  border:1px solid var(--accent);background:var(--a900);color:var(--a300);box-shadow:var(--sh-md);font:600 11px/1 var(--font);cursor:pointer}
+#assistant-fab:hover{background:var(--a800);color:var(--a100)}
+.assistant-grid{display:grid;grid-template-columns:290px minmax(0,1fr);min-height:520px}
+.assistant-checklist{padding:16px;border-right:1px solid var(--divider);overflow:auto}
+.assistant-chat{display:flex;flex-direction:column;min-width:0}
 .bar{height:7px;border-radius:4px;background:var(--deep);overflow:hidden}
 .bar>span{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,#5d5294,#9184d9)}
 .uln{box-shadow:inset 0 -2px 0 var(--accent);padding-bottom:1px}
@@ -128,6 +136,9 @@ pre.log{background:var(--deep);border-radius:var(--r-md);box-shadow:var(--sh-sm)
   #side.open{left:0}
   #main{margin-left:0;padding-top:52px}
   .kpis{grid-template-columns:repeat(2,1fr)}
+  #assistant-fab{right:14px;bottom:14px}
+  .assistant-grid{grid-template-columns:1fr;min-height:0}
+  .assistant-checklist{border-right:0;border-bottom:1px solid var(--divider);max-height:280px}
 }
 </style>
 </head>
@@ -138,12 +149,13 @@ pre.log{background:var(--deep);border-radius:var(--r-md);box-shadow:var(--sh-sm)
   <main id="main" style="flex:1;min-width:0"><div id="view"></div></main>
 </div>
 <div id="modal"></div><div id="toast"></div>
+<button id="assistant-fab" type="button" title="打开 GEO 助手" aria-label="打开 GEO 助手" onclick="openAssistant()">GEO</button>
 
 <script>
 const $=(s,r=document)=>r.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pct=v=>v==null?'—':(v*100).toFixed(v>0&&v<0.095?1:0)+'%';
-const api=async(u,o)=>{try{const r=await fetch(u,o);if(!r.ok)return{error:`HTTP ${r.status}`};return await r.json().catch(()=>({error:'响应不是 JSON'}))}catch(e){return{error:'连接失败：服务未响应'}}};
+const api=async(u,o)=>{try{const r=await fetch(u,o);const data=await r.json().catch(()=>({}));if(!r.ok)return{...data,error:data.error||`HTTP ${r.status}`};return data}catch(e){return{error:'连接失败：服务未响应'}}};
 const mktLabel=m=>m==='cn'?'国内':m==='global'?'海外':'通用';
 const diagTag=d=>{if(!d)return'<span style="font-size:12px;color:var(--t600)">—</span>';
   const cls=d.sev==='P0'?'tag-accent':d.sev==='P1'?'pill-warn':d.sev==='P2'?'tag-dim':'pill-good';
@@ -170,6 +182,7 @@ function progBar(p,f,w){ // 任务级 before/after：首测(f) → 当前(p) →
     <div class="bar" style="margin-top:3px;height:5px"><div style="height:100%;width:${Math.round(ratio*100)}%;background:${ratio>=1?'var(--a400)':'var(--accent)'};border-radius:4px"></div></div></div>`}
 const post=(u,b)=>api(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
 let D=null,SLUG=null,R='overview',ACTIONS={},POLL=null,RUNNING=null,LASTJOB=null,LOGOFF=0;
+const JOB_DONE={};
 let ST={gapTab:'content',engSel:null,wq:null,obStep:1,obSlug:null,obNoSample:false,obFail:false,obUrl:'',obName:'',obMkt:'both'};
 
 function toast(m,k=''){const t=document.createElement('div');t.className='toast '+k;t.textContent=m;
@@ -678,7 +691,7 @@ if(ULANG==='ja')document.title='GeoLook · 生成エンジン最適化プラッ�
 const NAV=[
  {t:'现状 · 我在 AI 里什么样',items:[['overview','总览'],['engines','引擎表现'],['competitors','竞品对比'],['questions','问题库']]},
  {t:'诊断 · 为什么是这样',items:[['siteaudit','站点体检'],['gaps','差距诊断'],['channels','阵地地图'],['facts','品牌事实库']]},
- {t:'提升 · 该做什么',items:[['plan','行动计划'],['workbench','内容工作台'],['assets','部署资产']]},
+ {t:'提升 · 该做什么',items:[['plan','行动计划'],['workbench','内容工作台'],['automation','内容自动化'],['assets','部署资产']]},
  {t:'成效 · 做了有没有用',items:[['verify','效果验收'],['report','报告与交付']]},
  {t:'账号',items:[['settings','设置']]},
 ];
@@ -692,6 +705,7 @@ function badge(k){
   if(k==='plan'){const n=(D.tasks||[]).filter(t=>t.status!=='done').length;return n?String(n):''}
   if(k==='gaps'){const q=(a.questions||[]).filter(x=>x.content!=='已成稿'&&!x.brand_probe).length;return q?String(q):''}
   if(k==='verify'){const n=(a.q_delta||[]).filter(x=>(x.after||0)>(x.before||0)).length;return n?String(n):''}
+  if(k==='automation'){return D.content_schedule&&D.content_schedule.enabled?'ON':''}
   return'';
 }
 function renderSide(){
@@ -730,9 +744,10 @@ function renderSide(){
 }
 
 /* ===================== 任务运行 ===================== */
-async function runAction(a,params){
+async function runAction(a,params,onDone){
   const r=await post('/api/run',{slug:SLUG,action:a,params:params||{}});
   if(!r.ok){toast(r.error||'启动失败','err');return null}
+  if(onDone)JOB_DONE[r.job.id]=onDone;
   RUNNING=r.job.id;LASTJOB=r.job.id;LOGOFF=0;renderSide();pollJob();
   toast('已启动：'+((ACTIONS[a]||{}).label||a));return r.job;
 }
@@ -746,12 +761,13 @@ async function pollJob(){
     ?`<span class="spin"></span>${esc(r.job.label)} 运行中…`
     :`${r.job.status==='done'?'✓':'✗'} ${esc(r.job.label)} ${({done:'完成',failed:'失败',stopped:'已停止',interrupted:'已中断'})[r.job.status]||r.job.status}`;
   if(r.job.status==='running'){POLL=setTimeout(pollJob,900)}
-  else{RUNNING=null;
+  else{const done=JOB_DONE[RUNNING];delete JOB_DONE[RUNNING];RUNNING=null;
     toast(`${r.job.label} ${r.job.status==='done'?'完成':'结束'}`,r.job.status==='done'?'':'err');
     if(R==='onboard'&&ST.obStep===2){
       if(r.job.status==='done'){ST.obFail=false;ST.obStep=3;await load(SLUG,true);return}
       ST.obFail=true;render();return}
-    await load(SLUG,true)}
+    await load(SLUG,true);
+    if(r.job.status==='done'&&done)await done(r.job)}
 }
 
 /* ===================== 总览 ===================== */
@@ -771,6 +787,7 @@ function vOverview(){
   const a=D.analytics,h=a.health,tr=a.trend||[];
   const [ht,hs]=headline();
   const S=h.subs;
+  const schedule=D.content_schedule||{};
   const kpis=[
     ['GEO 健康分',h.score==null?'—':h.score,`${h.measured.length}/5 项可测${S.fact==null?' · 事实一致性未测':''}`],
     ['提及率',pct(S.mention),'无提示样本中被主动提到'],
@@ -808,6 +825,21 @@ function vOverview(){
         <div style="font-size:11.5px;color:var(--t500)">${l}</div>
         <div style="font-size:29px;font-weight:500;letter-spacing:-.02em">${v}</div>
         <div style="font-size:11px;color:var(--t600);line-height:1.4">${n}</div></div>`).join('')}
+    </div>
+
+    <div class="card elev" style="margin-top:14px;padding:19px 20px;border:1px solid ${schedule.enabled?'var(--accent)':'var(--divider)'};background:${schedule.enabled?'linear-gradient(100deg,rgba(145,132,217,.14),var(--surface) 62%)':'var(--surface)'}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:18px;flex-wrap:wrap">
+        <div>
+          <div class="kicker" style="margin-bottom:5px">内容自动化</div>
+          <div style="font-size:18px;font-weight:600">每日自动创建 WisGate CMS 草稿</div>
+          <div style="font-size:12.5px;color:var(--t500);line-height:1.6;margin-top:4px">从英文问题库选择未重复主题，生成并检查初稿后推送到 CMS。只创建 <b>draft</b>，不会自动公开发布。</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="tag ${schedule.enabled?'tag-accent':'tag-dim'}" style="font-size:12px">${schedule.enabled?'已开启':'尚未开启'}</span>
+          ${schedule.enabled?`<span class="muted" style="font-size:12px">每天 ${esc(String(schedule.daily_count||1))} 篇 · ${esc(schedule.time||'09:00')}</span>`:''}
+          <button class="btn btn-primary" onclick="go('automation')">${schedule.enabled?'管理自动化':'设置每日推送'} →</button>
+        </div>
+      </div>
     </div>
 
     <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:14px;margin-top:14px">
@@ -1068,9 +1100,12 @@ function expandModal(){
   const rows=groups.map(gp=>{
     const ts=cand.filter(t=>t.group===gp);
     if(!ts.length)return'';
-    return `<div style="font-size:12px;color:var(--a300);margin:12px 0 4px">${gp} · ${ts.length}</div>`+
+    return `<label class="row" style="gap:7px;margin:12px 0 4px;cursor:pointer;width:max-content">
+        <input type="checkbox" class="exp-group-check" data-group="${esc(gp)}" style="width:auto" onchange="expSetGroup(this.dataset.group,this.checked)">
+        <span style="font-size:12px;color:var(--a300)">${gp} · ${ts.length} <span class="muted">（全选本类）</span></span>
+      </label>`+
       ts.map(t=>`<label class="row" style="gap:8px;padding:6px 8px;border-radius:var(--r-sm);cursor:pointer;box-shadow:inset 0 -1px 0 var(--line);align-items:flex-start">
-        <input type="checkbox" class="expchk" data-q="${esc(t.question)}" data-g="${esc(t.group)}" data-m="${esc(t.market)}" style="margin-top:3px">
+        <input type="checkbox" class="expchk" data-q="${esc(t.question)}" data-g="${esc(t.group)}" data-m="${esc(t.market)}" style="margin-top:3px" onchange="expSelectionChanged()">
         <span style="flex:1">
           <span style="font-size:13px">${esc(t.question)}</span>
           <span style="display:block;font-size:11px;color:var(--t600);margin-top:2px">${esc(t.term)} · ${esc(t.root)} · ${mktLabel(t.market)}${t.new?' · <span style="color:var(--a300)">新词</span>':''}</span>
@@ -1079,11 +1114,38 @@ function expandModal(){
   modal(`<h4 style="font-size:17px">拓词选题 · 来自真实搜索需求</h4>
     <p class="muted" style="font-size:12px;margin-top:4px"><span>词根：品牌 + 竞品 + 品类；来源：百度下拉（国内）+ Google 补全（海外）。勾选后入库，不自动加题。</span>
       <span>${EXPD.generated_at?esc(EXPD.generated_at)+' · ':''}</span><span>${EXPD.llm?'LLM 转写':'模板转写'}</span></p>
+    ${rows?`<div class="row" style="gap:8px;padding:10px 0 8px;box-shadow:inset 0 -1px 0 var(--line)">
+      <span id="exp-selected-count" class="tag tag-dim">已选 0 / ${cand.length}</span>
+      <button type="button" class="btn btn-secondary" style="font-size:11.5px;padding:3px 9px" onclick="expSelectAll(true)">全选全部</button>
+      <button type="button" class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px" onclick="expSelectAll(false)">清空选择</button>
+    </div>`:''}
     <div style="max-height:440px;overflow:auto;margin-top:6px">${rows||'<p class="muted" style="font-size:12.5px">候选都已入库——重新拓词看看有没有新词。</p>'}</div>
     <div class="row" style="justify-content:flex-end;margin-top:12px">
       <button class="btn btn-ghost" onclick="closeModal();runAction('expand')">重新拓词</button>
       <button class="btn btn-secondary" onclick="closeModal()">取消</button>
       <button class="btn btn-primary" onclick="expAdd()">加入问题库</button></div>`);
+}
+function expCheckboxes(group){
+  return [...document.querySelectorAll('.expchk')].filter(c=>!group||c.dataset.g===group);
+}
+function expSelectAll(on){
+  expCheckboxes().forEach(c=>c.checked=!!on);
+  expSelectionChanged();
+}
+function expSetGroup(group,on){
+  const boxes=expCheckboxes(group);
+  boxes.forEach(c=>c.checked=!!on);
+  expSelectionChanged();
+}
+function expSelectionChanged(){
+  const all=expCheckboxes(),count=all.filter(c=>c.checked).length;
+  const badge=$('#exp-selected-count');
+  if(badge)badge.textContent=`已选 ${count} / ${all.length}`;
+  document.querySelectorAll('.exp-group-check').forEach(box=>{
+    const choices=expCheckboxes(box.dataset.group),selected=choices.filter(c=>c.checked).length;
+    box.checked=!!choices.length&&selected===choices.length;
+    box.indeterminate=selected>0&&selected<choices.length;
+  });
 }
 function expAddIdx(i){
   const t=EXPD&&EXPD.terms&&EXPD.terms[i];
@@ -1114,7 +1176,7 @@ function vQuestions(){
         <td style="font-size:12.5px;color:var(--t500)">${mktLabel(q.market)}</td>
         <td><span class="tag ${(q.mention||0)>0?'pill-good':'pill-warn'}">${q.mention==null?'未采样':pct(q.mention)}</span></td>
         <td>${q.brand_probe?'<span style="font-size:12px;color:var(--t600)">—</span>':diagTag(q.diagnosis)}</td>
-        <td style="font-size:12.5px;color:${q.content==='已成稿'?'var(--a300)':'var(--t500)'}">${esc(q.content)}</td>
+        <td style="font-size:12.5px;color:${q.content_status==='final'||q.content_status==='cms_draft'?'var(--a300)':'var(--t500)'}">${esc(({not_started:'未开始',outline:'已有大纲',draft:'AI 初稿',final:'已成稿',cms_draft:'CMS 草稿'})[q.content_status]||q.content)}</td>
         <td><button class="btn btn-ghost" style="font-size:12px" onclick="go('workbench',{wq:${esc(JSON.stringify(q.id))}})">写内容</button></td></tr>`;
   }).join('');
   return `<div style="padding:32px 44px 72px;max-width:1280px">
@@ -1124,6 +1186,7 @@ function vQuestions(){
       <div class="row" style="flex:none">
         <button class="btn btn-ghost" onclick="showMethod()">生成规则</button>
         <button class="btn btn-secondary" onclick="editQuestions()">编辑问题库</button>
+        ${D.market==='global'?`<button class="btn btn-secondary" onclick="cleanGlobalQuestions()">清理中文题</button>`:''}
         <button class="btn btn-secondary" onclick="expandModal()">拓词选题</button>
         <button class="btn btn-primary" onclick="runAction('bootstrap')">AI 补充选题</button>
       </div>
@@ -1196,7 +1259,9 @@ async function saveQuestions(){
   const qs=[];
   for(const line of $('#qedit').value.split('\n')){
     const m=line.split('|');if(m.length<4||!m[3].trim())continue;
-    qs.push({id:m[0].trim(),group:m[1].trim()||'推荐',market:['cn','global','both'].indexOf(m[2].trim())>=0?m[2].trim():'cn',text:m.slice(3).join('|').trim()});
+    const market=['cn','global','both'].indexOf(m[2].trim())>=0?m[2].trim():'cn',text=m.slice(3).join('|').trim();
+    if(cfg.market==='global'&&(!text||/[\u3400-\u9fff]/.test(text)||market!=='global')){toast('Global 项目只能保存英文 global 问题','err');return}
+    qs.push({id:m[0].trim(),group:m[1].trim()||'推荐',market,text});
   }
   cfg.questions=qs; if(cfg.bootstrap)cfg.bootstrap.needs_review=false;
   const r=await post('/api/config/'+SLUG,cfg);
@@ -1405,6 +1470,9 @@ function chanOpen(name){
 /* ===================== 品牌事实库 ===================== */
 function vFacts(){
   const f=D.facts_struct||{},fc=D.analytics.factcheck||[];
+  const llmsFiles=D.market==='cn'?[['llms.txt','查看 llms.txt']]
+    :D.market==='global'?[['llms.en.txt','查看 llms.en.txt']]
+    :[['llms.txt','查看 llms.txt'],['llms.en.txt','查看 llms.en.txt']];
   const aiOf=field=>{const m=fc.find(x=>(x.field||'')&&((x.field||'').indexOf(field)>=0||field.indexOf(x.field)>=0));
     return m?{txt:m.said||'（缺失）',state:m.state}:{txt:'未比对——在「差距诊断 · 事实偏差」里记录',state:null}};
   const cards=[{field:'一句话定位',value:f.definition||'（未填写）'}]
@@ -1424,7 +1492,7 @@ function vFacts(){
     </div>
     <div class="row" style="margin-top:22px">
       <button class="btn btn-primary" onclick="runAction('generate',{'--asset':'llms,jsonld,snippets'})">重新生成 llms.txt 与结构化数据</button>
-      <a class="btn btn-secondary" target="_blank" href="/files/${SLUG}/assets/llms.txt">查看 llms.txt</a>
+      ${llmsFiles.map(([file,label])=>`<a class="btn btn-secondary" target="_blank" href="/files/${SLUG}/assets/${file}">${label}</a>`).join('')}
       <button class="btn btn-secondary" onclick="editFactsSrc()">编辑源文件</button>
     </div>
     <p class="muted" style="font-size:12px;margin-top:14px">纪律：一句话定位必须在官网首屏、关于页、JSON-LD description、llms.txt 四处逐字一致。生成文件的去处见资产目录里的 DEPLOY.md。</p>
@@ -1528,12 +1596,14 @@ async function setTask(id,status){
 }
 
 /* ===================== 内容工作台 ===================== */
-let WB={qid:null,sources:[],cur:null,text:'',check:null,q:null};
-async function loadWB(qid){
+let WB={qid:null,sources:[],cur:null,text:'',check:null,q:null,researching:false,researchSources:[]};
+let AG={context:null,messages:[],busy:false};
+async function loadWB(qid,preferKind){
   const w=await api(`/api/workbench/${SLUG}?qid=${encodeURIComponent(qid||'')}`);
-  WB.qid=qid;WB.sources=w.sources||[];WB.q=w.question;WB.cur=null;WB.text='';WB.check=null;
+  WB.qid=qid;WB.sources=w.sources||[];WB.q=w.question;WB.cur=null;WB.text='';WB.check=null;WB.researching=false;WB.researchSources=[];
   WB.miss=(qid&&!WB.q&&!w.error)?qid:null;
-  if(WB.sources.length)await loadWBFile(0); else render();
+  const target=preferKind?WB.sources.findIndex(s=>s.kind===preferKind):0;
+  if(WB.sources.length)await loadWBFile(target>=0?target:0); else render();
 }
 async function loadWBFile(i){
   WB.cur=WB.sources[i];
@@ -1564,6 +1634,7 @@ function vWorkbench(){
         <div class="card elev" style="padding:14px;gap:8px">
           <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600)">这条任务要解决</div>
           <div style="font-size:13.5px;line-height:1.5">${esc(q.text)}</div>
+          ${WB.data&&WB.data.content_status?`<div style="font-size:11.5px;color:var(--t500)">内容状态：${esc(({not_started:'未开始',outline:'已有大纲',draft:'AI 初稿待审核',final:'已成稿',cms_draft:'已推送 CMS 草稿'})[WB.data.content_status.status]||WB.data.content_status.status)}${WB.data.content_status.duplicate?` · ⚠ 与 ${esc(WB.data.content_status.duplicate.question_id)} 选题${WB.data.content_status.duplicate.level==='exact'?'重复':'高度相似'}`:''}</div>`:''}
           <div style="font-size:11.5px;color:var(--t500)">${stat?('你当前提及 '+(stat.mention==null?'未采样':pct(stat.mention))+' · '+stat.samples+' 样本 · 内容'+stat.content):''}</div>
         </div>
         <div class="card elev" style="padding:14px;gap:9px">
@@ -1581,11 +1652,16 @@ function vWorkbench(){
       <div class="card elev" style="padding:0;overflow:hidden">
         <div class="row" style="padding:11px 14px;box-shadow:inset 0 -1px 0 var(--divider)">
           ${WB.sources.map((s,i)=>`<button class="btn ${WB.cur===s?'btn-primary':'btn-ghost'}" style="font-size:12px"
-            onclick="loadWBFile(${i})">${({content:'成稿',draft:'AI 初稿',outline:'大纲'})[s.kind]}</button>`).join('')||'<span class="muted" style="font-size:12px">还没有任何底稿——先跑「生成资产」出大纲</span>'}
+            onclick="loadWBFile(${i})">${({content:'成稿',draft:'AI 初稿',history:'历史初稿',outline:'大纲'})[s.kind]}</button>`).join('')||'<span class="muted" style="font-size:12px">还没有任何底稿——先跑「生成资产」出大纲</span>'}
           <span style="margin-left:auto" class="row">
             <button class="btn btn-ghost" style="font-size:12px" onclick="wbCheck()">重新预检</button>
+            ${wbPreviousSource()?`<button class="btn btn-ghost" style="font-size:12px" onclick="wbRestorePrevious()">回溯上一篇内容</button>`:''}
+            ${WB.cur&&WB.cur.kind!=='outline'&&ck&&ck.blocks&&Object.values(ck.blocks).some(v=>!v)?`<button class="btn btn-ghost" style="font-size:12px" onclick="wbCompleteBlocks()" ${WB.repairing?'disabled':''}>${WB.repairing?'正在补齐…':'补齐缺少块'}</button>`:''}
+            ${WB.cur&&WB.cur.kind!=='outline'?`<button class="btn btn-ghost" style="font-size:12px" onclick="wbResearch()" ${WB.researching?'disabled':''}>${WB.researching?'正在搜索官方来源…':'搜索并处理待补内容'}</button>`:''}
+            ${WB.cur&&WB.cur.kind!=='outline'&&WB.cur.kind!=='history'?`<button class="btn btn-ghost" style="font-size:12px" onclick="wbRegenerate()">重新生成 AI 初稿</button>`:''}
             <button class="btn btn-secondary" style="font-size:12px" onclick="wbSave()">保存</button>
-            ${WB.cur&&WB.cur.kind!=='content'?`<button class="btn btn-primary" style="font-size:12px" onclick="wbPublish()">发布为成稿</button>`:''}
+            ${WB.cur&&WB.cur.kind==='outline'?`<button class="btn btn-primary" style="font-size:12px" onclick="wbDraft()">${q&&q.market==='global'?'一键生成完整英文初稿':'一键生成完整 AI 初稿'}</button>`:''}
+            ${WB.cur&&WB.cur.kind==='draft'?`<button class="btn btn-primary" style="font-size:12px" onclick="wbPublish()">发布为成稿</button>`:''}
             ${WB.cur&&WB.cur.kind==='content'?`<button class="btn btn-primary" style="font-size:12px" onclick="pubModal()">发布到渠道…</button>`:''}</span>
         </div>
         <textarea id="wbtext" class="input" style="border:0;border-radius:0;min-height:480px" oninput="WB.text=this.value">${esc(WB.text)}</textarea>
@@ -1599,6 +1675,15 @@ function vWorkbench(){
           ${(ck?ck.checks.slice(0,2):[]).map(c=>`<div class="row" style="gap:8px;font-size:12.5px">
             <span class="dot" style="background:${c.ok?'var(--accent)':'#595d6c'}"></span><span>${esc(c.t)}</span></div>`).join('')}
         </div>
+        ${WB.researchSources.length?`<div class="card elev" style="padding:14px;gap:7px">
+          <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600)">待补事实 · 已查来源</div>
+          ${WB.researchSources.map(s=>`<div style="font-size:12px;line-height:1.45;box-shadow:inset 0 -1px 0 var(--line);padding:5px 0">
+            <div class="row" style="gap:6px"><span class="tag ${s.official?'tag-accent':'tag-dim'}" style="font-size:9px">${s.official?'官网':'线索'}</span>
+              <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title||s.url)}</a></div>
+            ${s.field?`<div class="muted" style="font-size:10.5px">对应：${esc(s.field)}</div>`:''}
+          </div>`).join('')}
+          <div class="muted" style="font-size:11px">只有“官网”来源会被用于自动补充；结果仍需点击保存才会写入文件。</div>
+        </div>`:''}
         ${WB.cur&&WB.cur.kind==='draft'&&D.lint&&D.lint.total?`<div class="card" style="padding:12px 14px;box-shadow:0 0 0 1px var(--a700);gap:5px">
           <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)">初稿风险</div>
           <div style="font-size:12.5px;color:var(--t400);line-height:1.5">该初稿所在批次有 <b>${D.lint.total}</b> 项待人工核实（高风险 ${D.lint.high}）。
@@ -1636,27 +1721,172 @@ function wbPickRows(){
       onclick="go('workbench',{wq:${esc(JSON.stringify(q.id))}})">
     <span style="flex:1;font-size:13px">${esc(q.text)}${demandTag(q.id)}</span>
     ${diagTag(q.diagnosis)}
-    <span style="font-size:11.5px;color:${q.content==='已成稿'?'var(--a300)':'var(--t600)'};flex:none">${esc(q.content)}</span>
+    <span style="font-size:11.5px;color:${q.content_status==='final'||q.content_status==='cms_draft'?'var(--a300)':'var(--t600)'};flex:none">${esc(({not_started:'未开始',outline:'已有大纲',draft:'AI 初稿',final:'已成稿',cms_draft:'CMS 草稿'})[q.content_status]||q.content)}${q.duplicate?' · ⚠相似':''}</span>
     <span class="muted" style="font-size:11px;flex:none">${mktLabel(q.market)}</span></div>`).join('')
     ||'<div class="muted" style="font-size:12.5px;padding:10px">没有匹配的问题</div>';
 }
 function wbFilterList(v){ST.wbFilter=v;const el=$('#wbpick');if(el)el.innerHTML=wbPickRows()}
 async function wbCheck(){WB.text=$('#wbtext').value;
   const ck=await post('/api/precheck',{text:WB.text});WB.check=(ck&&ck.error)?null:ck;render()}
+async function wbDraft(){
+  if(!WB.q||!WB.cur||WB.cur.kind!=='outline'){toast('请先打开一个大纲','err');return}
+  const qid=WB.q.id;
+  await runAction('generate',{'--asset':'drafts','--draft':true,'--draft-limit':1,'--question':qid},async()=>{
+    if(R==='workbench')await loadWB(qid);
+  });
+}
+async function cleanGlobalQuestions(){
+  if(!confirm('将移出 Global 项目中的中文或非 Global 问题。原问题库会自动备份到 history/，继续吗？'))return;
+  const r=await post('/api/clean-global-questions/'+SLUG,{});
+  toast(r.ok?`已清理：保留 ${r.kept} 题，移出 ${r.removed} 题`:'清理失败：'+(r.error||''),r.ok?'':'err');
+  if(r.ok)load(SLUG,true);
+}
+async function wbRegenerate(){
+  if(!WB.q||!WB.cur||WB.cur.kind==='outline'||WB.cur.kind==='history'){toast('请先打开初稿或成稿','err');return}
+  if(!confirm('将根据当前大纲生成一份新的 AI 初稿。现有初稿会归档，可随时回溯。继续吗？'))return;
+  const qid=WB.q.id;
+  await runAction('generate',{'--asset':'drafts','--draft':true,'--draft-limit':1,'--question':qid},async()=>{
+    if(R==='workbench')await loadWB(qid,'draft');
+  });
+}
+function wbPreviousSource(){
+  if(!WB.cur)return null;
+  const start=WB.sources.indexOf(WB.cur);
+  if(start<0)return null;
+  if(WB.cur.kind==='content')return WB.sources.find(s=>s.kind==='draft')||null;
+  if(WB.cur.kind==='draft')return WB.sources.find(s=>s.kind==='history')||WB.sources.find(s=>s.kind==='outline')||null;
+  if(WB.cur.kind==='history')return WB.sources.slice(start+1).find(s=>s.kind==='history')||WB.sources.find(s=>s.kind==='outline')||null;
+  return null;
+}
+async function wbRestorePrevious(){
+  const previous=wbPreviousSource();
+  if(!previous){toast('没有可回溯的上一版','err');return}
+  if(!confirm('回溯会替换编辑器中的当前内容；保存后才会写入对应文件。继续吗？'))return;
+  let r;
+  if(previous.kind==='content')r=await api(`/api/content/${SLUG}?path=${encodeURIComponent(previous.path)}`);
+  else r=await api(`/api/asset/${SLUG}?path=${encodeURIComponent(previous.path)}`);
+  if(r.error){toast('读取上一版失败：'+r.error,'err');return}
+  const draft=WB.sources.find(s=>s.kind==='draft');
+  const destination=(previous.kind==='history'&&draft)?draft:previous;
+  WB.text=r.text||'';WB.cur=destination;
+  const ck=await post('/api/precheck',{text:WB.text});WB.check=(ck&&ck.error)?null:ck;
+  toast('已载入上一版内容；确认无误后点击保存');render();
+}
+async function wbCompleteBlocks(){
+  if(WB.repairing)return;
+  if(!WB.q||!WB.cur||WB.cur.kind==='outline'){toast('请先从大纲生成完整初稿','err');return}
+  WB.text=$('#wbtext').value;
+  WB.repairing=true;render();toast('正在补齐缺少块，请等待模型返回…');
+  try{
+    const r=await post('/api/draft-repair/'+SLUG,{text:WB.text,market:WB.q.market||'cn'});
+    if(!r.ok){toast('补齐失败：'+(r.error||''),'err');return}
+    if(!r.changed){toast(r.message||'没有可补齐的内容','err');return}
+    WB.text=r.text||WB.text;
+    const ck=await post('/api/precheck',{text:WB.text});WB.check=(ck&&ck.error)?null:ck;
+    toast((r.message||'已补齐缺少块')+'；请核对后保存');
+  }finally{WB.repairing=false;render()}
+}
+async function wbResearch(){
+  if(WB.researching)return;
+  if(!WB.q||!WB.cur||WB.cur.kind==='outline'){toast('请先打开初稿或成稿','err');return}
+  WB.text=$('#wbtext').value;
+  WB.researching=true;render();toast('正在搜索官网与已缓存的一手来源…');
+  try{
+    const r=await post('/api/research/'+SLUG,{text:WB.text,market:WB.q.market||'global'});
+    WB.researchSources=r.sources||[];
+    if(!r.ok){toast('检索失败：'+(r.error||'服务未返回原因'),'err');return}
+    if(r.changed){
+      WB.text=r.text||WB.text;
+      const ck=await post('/api/precheck',{text:WB.text});WB.check=(ck&&ck.error)?null:ck;
+    }
+    toast(r.message||'没有待补事实');
+  }finally{WB.researching=false;render()}
+}
+async function loadAssistantContext(){
+  if(AG.context)return true;
+  const r=await api('/api/assistant/'+SLUG);
+  if(r.error){AG.error=r.error;return false}
+  AG.context=r;AG.error='';return true;
+}
+function assistantPanel(){
+  const c=AG.context||{},rows=c.checklist||[],actions=c.actions||[];
+  return `<div id="assistant-pop">
+    <div class="row" style="padding:13px 16px;box-shadow:inset 0 -1px 0 var(--divider)">
+      <div style="flex:1"><div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)">GEO EXPERT</div><div style="font-size:16px;font-weight:500">GEO 助手</div></div>
+      <button class="btn btn-ghost" title="关闭助手" aria-label="关闭助手" onclick="closeModal()">关闭</button>
+    </div>
+    <div class="assistant-grid">
+      <section class="assistant-checklist">
+        <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600);margin-bottom:7px">项目检查清单</div>
+        ${rows.map(x=>`<div class="row" style="gap:8px;font-size:12.5px;box-shadow:inset 0 -1px 0 var(--line);padding:7px 0">
+          <span class="dot" style="background:${x.ok?'var(--accent)':'#595d6c'}"></span><span style="flex:1">${esc(x.label)}</span>
+          ${x.detail?`<span class="muted" style="font-size:11px">${esc(x.detail)}</span>`:''}
+          <button class="btn btn-ghost" style="font-size:11px" onclick="closeModal();go('${esc(x.route)}')">打开</button></div>`).join('')}
+        <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600);margin:14px 0 6px">快捷入口</div>
+        <div class="row" style="gap:5px">${actions.map(x=>`<button class="btn btn-secondary" style="font-size:11px" onclick="closeModal();go('${esc(x.route)}')">${esc(x.label)}</button>`).join('')}</div>
+      </section>
+      <section class="assistant-chat">
+        <div style="padding:12px 14px;font-size:12.5px;color:var(--t400);box-shadow:inset 0 -1px 0 var(--divider)">围绕 ${esc(c.brand||SLUG)} 的事实、问题库、内容和抽取块给出下一步操作建议。</div>
+        <div style="flex:1;min-height:260px;max-height:440px;overflow:auto;padding:14px">
+          ${AG.messages.length?AG.messages.map(m=>`<div style="margin-bottom:12px;max-width:92%;${m.role==='user'?'margin-left:auto;text-align:right':''}">
+            <div class="muted" style="font-size:10px;margin-bottom:3px">${m.role==='user'?'你':'AtlasGEO'}</div>
+            <div style="display:inline-block;text-align:left;background:${m.role==='user'?'var(--a900)':'var(--deep)'};padding:8px 10px;border-radius:var(--r-md);font-size:13px;white-space:pre-wrap;line-height:1.55">${esc(m.text)}</div></div>`).join(''):'<div class="muted" style="font-size:13px;padding:30px 8px;text-align:center">可以问：我现在最该先补什么？如何生成英文初稿？</div>'}
+          ${AG.busy?'<div class="muted" style="font-size:12px"><span class="spin"></span>正在分析项目状态…</div>':''}
+        </div>
+        <div style="padding:10px 14px;box-shadow:inset 0 1px 0 var(--divider)">
+          <textarea id="agmsg" class="input" rows="3" placeholder="输入你的 GEO 问题…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();assistantSend()}"></textarea>
+          <div class="row" style="justify-content:flex-end;margin-top:7px"><span class="muted" style="font-size:11px;margin-right:auto">Enter 发送，Shift+Enter 换行</span><button class="btn btn-primary" onclick="assistantSend()" ${AG.busy?'disabled':''}>发送</button></div>
+        </div>
+      </section>
+    </div>
+  </div>`;
+}
+async function openAssistant(){
+  modal('<div id="assistant-pop" style="padding:28px" class="muted"><span class="spin"></span>正在加载 GEO 助手…</div>');
+  await renderAssistantPopup();
+}
+async function renderAssistantPopup(){
+  const host=$('#assistant-pop');if(!host)return;
+  if(!await loadAssistantContext()){
+    host.innerHTML=`<div style="padding:24px"><h4>GEO 助手暂时不可用</h4><p class="soft" style="font-size:13px">${esc(AG.error||'服务未响应')}</p></div>`;
+    return;
+  }
+  host.outerHTML=assistantPanel();
+  const input=$('#agmsg');if(input&&!AG.busy)input.focus();
+}
+async function vAssistant(){
+  setTimeout(openAssistant,0);
+  return '<div style="padding:44px" class="muted">GEO 助手已在右下角打开。</div>';
+}
+async function assistantSend(){
+  if(AG.busy)return;
+  const el=$('#agmsg'),message=(el?el.value:'').trim();
+  if(!message){toast('请输入问题','err');return}
+  AG.messages.push({role:'user',text:message});AG.busy=true;renderAssistantPopup();
+  try{
+    const r=await post('/api/assistant/'+SLUG,{message});
+    if(r.context)AG.context=r.context;
+    AG.messages.push({role:'assistant',text:r.ok?(r.answer||'没有返回内容'):(r.error||'助手暂时不可用')});
+  }catch(e){AG.messages.push({role:'assistant',text:'助手暂时不可用，请检查 API 配置。'})}
+  finally{AG.busy=false;renderAssistantPopup()}
+}
 async function wbPublish(){
-  // 草稿/大纲 → content/ 成稿：内容承接指标由此上涨。文件头写入 qid 供蓝图识别。
+  // 只允许完整初稿 → content/ 成稿；大纲绝不能被误写为对外内容。
   WB.text=$('#wbtext').value;
   if(!WB.q){toast('没有目标问题','err');return}
-  if(WB.cur&&WB.cur.kind==='draft'&&D.lint&&D.lint.total)
+  if(!WB.cur||WB.cur.kind!=='draft'){toast('请先从大纲生成完整 AI 初稿，再发布为成稿','err');return}
+  if(D.lint&&D.lint.total)
     if(!confirm(`初稿风险检查有 ${D.lint.total} 项待人工核实（高风险 ${D.lint.high}）。确认已核实事实？`))return;
   let text=WB.text;
   if(text.indexOf(WB.q.id)<0)text=`<!-- 目标问题 ${WB.q.id} -->\n\n`+text;
+  text=text.replace(/(geolook-content:\s*question_id=[^;]+;\s*lifecycle=)draft(?=;)/,'$1final');
   const r=await post('/api/content/'+SLUG,{path:`${WB.q.id}-成稿.md`,text});
   if(!r.ok){toast('发布失败：'+(r.error||''),'err');return}
   toast('已发布为成稿。重新生成蓝图后「内容承接」会更新');
+  const qid=WB.q.id;await loadWB(qid,'content');
   runAction('blueprint');
 }
-function wbReset(){WB={qid:null,sources:[],cur:null,text:'',check:null,q:null};ST.wq=null;render()}
+function wbReset(){WB={qid:null,sources:[],cur:null,text:'',check:null,q:null,researching:false,researchSources:[]};ST.wq=null;render()}
 async function pubModal(){
   if(!WB.cur||WB.cur.kind!=='content'){toast('先切到成稿再发布','err');return}
   if(!PUB)PUB=await api('/api/publish/'+SLUG);
@@ -1667,7 +1897,7 @@ async function pubModal(){
     <p class="muted" style="font-size:12px;margin-top:4px">文件：${esc(rel)}。发布是对外动作——点一次发一次；公众号 / WordPress 只建草稿，到各自后台确认后才对外。</p>
     ${ready.map(x=>`<div class="row" style="padding:7px 0;box-shadow:inset 0 -1px 0 var(--line)">
       <span style="flex:1;font-size:13px">${esc(x.name)}<span class="muted" style="font-size:11px;margin-left:6px">${esc(x.note)}</span></span>
-      <button class="btn btn-primary" style="font-size:12px" onclick="doPublish('${x.code}')">发布</button></div>`).join('')
+      <button class="btn btn-primary" style="font-size:12px" onclick="doPublish('${x.code}')">${x.code==='wisgate_cms'?'审核关键词':'发布'}</button></div>`).join('')
       ||'<div class="muted" style="font-size:12.5px">还没有就绪的渠道——到「设置 → 发布渠道」配置凭证</div>'}
     ${recs.length?`<div style="margin-top:10px"><div style="font-size:12px;color:var(--t500);margin-bottom:4px">该文件的发布记录</div>
       ${recs.map(r=>`<div style="font-size:12px;color:var(--t400);padding:3px 0">${r.ok?'✓':'✗'} ${esc((r.at||'').slice(0,16).replace('T',' '))} ${esc(r.platform_name)} ${r.url?`<a href="${esc(r.url)}" target="_blank" style="color:var(--a300)">${esc(r.url)}</a>`:esc(r.note||r.error||'')}</div>`).join('')}</div>`:''}
@@ -1676,6 +1906,7 @@ async function pubModal(){
       <button class="btn btn-secondary" onclick="closeModal()">关闭</button></div>`);
 }
 async function doPublish(code){
+  if(code==='wisgate_cms'){await cmsKeywordReview();return}
   const rel='content/'+WB.cur.path;
   const name=((PUB&&PUB.publishers)||[]).find(x=>x.code===code)?.name||code;
   if(!confirm(`确认发布「${WB.cur.path}」到「${name}」？`))return;
@@ -1683,9 +1914,61 @@ async function doPublish(code){
   toast(r.ok?('已发布'+(r.url?'：'+r.url:(r.note?'，'+r.note:''))):('发布失败：'+(r.error||'')),r.ok?'':'err');
   PUB=null;if(r.ok)pubModal();
 }
+async function cmsKeywordReview(){
+  const rel='content/'+WB.cur.path;
+  const r=await post('/api/publish-preview/'+SLUG,{platform:'wisgate_cms',path:rel});
+  if(!r.ok){toast('关键词预览失败：'+(r.error||''),'err');return}
+  const tags=(r.tags||[]).slice(0,3);
+  const issues=Array.isArray(r.issues)?r.issues:[];
+  const high=issues.filter(x=>x.level==='高').length;
+  modal(`<h4 style="font-size:17px">CMS 发布前审核</h4>
+    <p class="muted" style="font-size:12px;margin-top:4px">以下内容来自当前成稿。审核窗口不会创建 CMS 内容；修改成稿或标签后，再点确认创建草稿。</p>
+    <div class="card" style="padding:12px 14px;gap:6px;margin-top:8px">
+      <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600)">Title</div>
+      <div id="cms-review-title" style="font-size:19px;line-height:1.35;font-weight:600;color:var(--t200);overflow-wrap:anywhere">${esc(r.title||'未设置标题')}</div>
+    </div>
+    <div class="field"><label>Summary</label><textarea class="input" style="min-height:66px" readonly>${esc(r.summary||'')}</textarea></div>
+    <div class="row" style="gap:10px;margin:2px 0 8px;font-size:12px">
+      <span class="tag tag-outline">Status: ${esc(r.status||'draft')}</span>
+      <span class="tag tag-outline">Platform: ${esc(r.platform||'wisdom-gate')}</span>
+      <span class="tag tag-outline">Model: ${esc(r.model||'留空')}</span></div>
+    <div class="card" style="padding:10px 14px;gap:5px">
+      <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600)">Slug</div>
+      <code style="font-size:12px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;color:var(--t400)">${esc(r.slug||'未生成')}</code>
+    </div>
+    <div class="field"><label>关键词 / Tags（固定 3 个）</label>
+      ${[0,1,2].map((i)=>`<div class="row" style="gap:8px;margin-top:${i?'6px':'0'}"><span class="tag tag-outline" style="width:58px;text-align:center">关键词 ${i+1}</span><input id="cms-review-tag-${i}" class="input" value="${esc(tags[i]||'')}" maxlength="60"></div>`).join('')}</div>
+    <p class="muted" style="font-size:11.5px">每个关键词单独审核。正文 ${esc(String(r.characters||0))} 字符 · Markdown。</p>
+    ${issues.length?`<div class="card" style="padding:11px 12px;gap:7px;box-shadow:0 0 0 1px var(--a700);margin-top:10px">
+      <div style="font-size:12.5px;color:var(--t400)">待人工核实：<b>${issues.length}</b> 项${high?`（高风险 ${high} 项）`:''}</div>
+      <div class="muted" style="font-size:11px;line-height:1.45">每项已定位到当前成稿的章节、行号和原文片段。根据来源决定修改，或明确选择保持原样创建草稿。</div>
+      ${issues.map(i=>`<div style="padding:7px 0;box-shadow:inset 0 -1px 0 var(--line);font-size:12px">
+        <div class="row" style="gap:6px"><span class="tag ${i.level==='高'?'tag-accent':'tag-dim'}" style="font-size:9px">${esc(i.level||'提示')}</span><b>${esc(i.type||'待核实')}</b></div>
+        <div style="color:var(--t500);margin-top:3px">${esc(i.detail||'')}</div>
+        <div class="muted" style="font-size:10.5px;margin-top:2px">第 ${esc(String(i.line||'?'))} 行 · ${esc(i.section||'开头')}</div>
+        ${i.excerpt?`<code style="display:block;white-space:normal;word-break:break-word;font-size:10.5px;margin-top:4px;color:var(--t600)">${esc(i.excerpt)}</code>`:''}
+      </div>`).join('')}</div>`:`<div class="card" style="padding:10px 12px;margin-top:10px;box-shadow:0 0 0 1px var(--a500);font-size:12px;color:var(--t400)">当前成稿未发现需要人工核实的占位品牌、未核实数字或年份风险。</div>`}
+    <div class="row" style="justify-content:flex-end;margin-top:12px;gap:8px">
+      <button class="btn btn-ghost" onclick="closeModal();$('#wbtext')?.focus()">返回成稿修改</button>
+      <button class="btn btn-secondary" onclick="pubModal()">返回渠道</button>
+      <button class="btn btn-primary" onclick="publishCmsReviewed()">${issues.length?'保持原样并创建 CMS 草稿':'确认并创建 CMS 草稿'}</button></div>`);
+}
+async function publishCmsReviewed(){
+  const title=($('#cms-review-title')?.textContent||'').trim();
+  if(!title||title==='未设置标题'){toast('标题不能为空，请先回到成稿补充标题','err');return}
+  const tags=[0,1,2].map(i=>($('#cms-review-tag-'+i)?.value||'').trim());
+  if(tags.some(x=>!x)){toast('请填写完整的 3 个关键词标签','err');return}
+  if(new Set(tags.map(x=>x.toLowerCase())).size!==3){toast('3 个关键词不能重复','err');return}
+  if(tags.some(x=>x.length>60)){toast('每个关键词不能超过 60 个字符','err');return}
+  const rel='content/'+WB.cur.path;
+  const r=await post('/api/publish/'+SLUG,{platform:'wisgate_cms',path:rel,title,options:{tags}});
+  toast(r.ok?('已创建 CMS 草稿'+(r.url?'：'+r.url:'')):('发布失败：'+(r.error||'')),r.ok?'':'err');
+  PUB=null;if(r.ok)pubModal();
+}
 async function wbSave(){
   WB.text=$('#wbtext').value;
   const s=WB.cur;if(!s){toast('没有底稿可保存','err');return}
+  if(s.kind==='history'){toast('历史版本仅供预览，请使用“回溯上一篇内容”恢复到初稿','err');return}
   let r;
   if(s.kind==='content')r=await post('/api/content/'+SLUG,{path:s.path,text:WB.text});
   else r=await post('/api/asset/'+SLUG,{path:s.path,text:WB.text});
@@ -1859,8 +2142,9 @@ async function vSettings(){
   if(!SET_CFG)SET_CFG=await api('/api/config/'+SLUG);
   if(!PUB)PUB=await api('/api/publish/'+SLUG);
   const mon=(SET_CFG&&SET_CFG.monitor)||{},monCur=mon.every_days||0;
+  const contentSchedule=(SET_CFG&&SET_CFG.content_schedule)||{};
   setTimeout(()=>{if(LASTJOB&&!RUNNING)showLog(LASTJOB)},0);
-  const acts=['crawl','audit','bootstrap','sample','sample-sheet','plan','blueprint','generate','lint','report','deliverables','verify','deliver'];
+  const acts=['crawl','audit','bootstrap','sample','sample-sheet','plan','blueprint','generate','auto-drafts','lint','smoke','report','deliverables','verify','deliver'];
   return `<div style="padding:32px 44px 72px;max-width:1180px">
     ${head('设置','所有配置在一处，按「改了会影响什么」分组','采样与运行是设置而不是日常导航——日常你只需要看四段主线。')}
 
@@ -1896,9 +2180,21 @@ async function vSettings(){
           <button class="btn btn-primary" style="font-size:12.5px" ${RUNNING?'disabled':''} onclick="runAction('autopilot')">✦ 全自动引导</button>
           <button class="btn btn-primary" style="font-size:12.5px" ${RUNNING?'disabled':''} onclick="runAction('serve')">▶ 跑完整一期</button>
         </div>
+        <div class="row" style="gap:6px;padding-top:4px;box-shadow:inset 0 1px 0 var(--line)">
+          <span style="font-size:12px;color:var(--t500)">自动内容队列</span>
+          ${[1,3,5].map(n=>`<button class="btn btn-secondary" style="font-size:11.5px;padding:3px 9px" ${RUNNING?'disabled':''} onclick="runAction('auto-drafts',{'--limit':n})">生成下一批 ${n} 篇</button>`).join('')}
+          <span class="muted" style="font-size:11px">跳过已有初稿/成稿与高度相似选题；只生成待审核初稿，不会发布。</span>
+        </div>
+        <div class="row" style="gap:6px;align-items:center;padding-top:7px;box-shadow:inset 0 1px 0 var(--line)">
+          <span style="font-size:12px;color:var(--t500)">每日 CMS 草稿</span>
+          <span class="tag ${contentSchedule.enabled?'tag-accent':'tag-dim'}">${contentSchedule.enabled?'已开启':'已关闭'}</span>
+          <span class="muted" style="font-size:11px">按问题库自动去重 → 生成英文初稿 → 创建 CMS Draft；不会公开发布。</span>
+          <button class="btn btn-secondary" style="font-size:11.5px;padding:3px 9px" onclick="go('automation')">打开自动化中心</button>
+          <button class="btn btn-ghost" style="font-size:11.5px;padding:3px 9px" ${RUNNING?'disabled':''} onclick="runAction('daily-content',{'--limit':contentSchedule.daily_count||1})">现在运行</button>
+        </div>
         <div class="row" style="gap:6px">
           ${acts.map(x=>`<button class="btn btn-secondary" style="font-size:11.5px;padding:4px 9px" ${RUNNING?'disabled':''}
-            onclick="runAction('${x}')">${esc((ACTIONS[x]||{}).label||x)}</button>`).join('')}
+            onclick="runAction('${x}'${x==='smoke'?',{\'--url\':location.origin}':''})">${esc((ACTIONS[x]||{}).label||x)}</button>`).join('')}
         </div>
         <div class="row" style="gap:6px;align-items:center;padding-top:4px;box-shadow:inset 0 1px 0 var(--line)">
           <span style="font-size:12px;color:var(--t500)">周期复跑</span>
@@ -1980,7 +2276,7 @@ async function switchModal(){
       <button class="btn btn-primary" onclick="closeModal()">关闭</button></div>`);
 }
 async function switchProject(slug){KEYS=null;PROJECTS=null;SET_CFG=null;PUB=null;AS={tree:null,cur:null,text:''};
-  WB={qid:null,sources:[],cur:null,text:'',check:null,q:null};ST.engSel=null;
+  WB={qid:null,sources:[],cur:null,text:'',check:null,q:null,researching:false,researchSources:[]};AG={context:null,messages:[],busy:false};ST.engSel=null;
   await load(slug);go('overview')}
 async function editConfig(){
   const cfg=await api('/api/config/'+SLUG);const b=cfg.brand||{};
@@ -1996,6 +2292,7 @@ async function editConfig(){
 }
 async function saveCfg(){
   const cfg=await api('/api/config/'+SLUG);
+  if(cfg.error){toast('读取品牌配置失败：'+cfg.error,'err');return}
   const sp=v=>v.split(/[、,，]/).map(s=>s.trim()).filter(Boolean);
   cfg.brand.name=$('#c-name').value.trim();
   cfg.brand.aliases=sp($('#c-alias').value);
@@ -2004,17 +2301,118 @@ async function saveCfg(){
   cfg.market=document.querySelector('input[name=cmkt]:checked').value;
   if(cfg.bootstrap)cfg.bootstrap.needs_review=false;
   const r=await post('/api/config/'+SLUG,cfg);
-  toast(r.ok?'已保存':'失败',r.ok?'':'err');if(r.ok){closeModal();load(SLUG,true)}
+  toast(r.ok?'品牌配置已保存':'保存失败：'+(r.error||'服务未返回原因'),r.ok?'':'err');
+  if(r.ok){
+    // 设置页此前复用了旧 PROJECTS/SET_CFG，保存后看起来像没有更新。
+    SET_CFG=null;PROJECTS=null;
+    closeModal();load(SLUG,true);
+  }
+}
+async function editContentSchedule(){
+  const cfg=await api('/api/config/'+SLUG),s=cfg.content_schedule||{};
+  modal(`<h4 style="font-size:17px">每日自动创建 CMS 草稿</h4>
+    <p class="muted" style="font-size:12px;margin-top:4px">从问题库选未重复选题，生成 AI 初稿，检查高风险内容后推送到 WisGate CMS，Status 固定为 <b>draft</b>。不会自动公开发布。看板必须保持运行，任务会在设定时间后的约一分钟内启动。</p>
+    <div class="field"><label><input id="cs-enabled" type="checkbox" style="width:auto" ${s.enabled?'checked':''}> 启用每日自动推送 CMS 草稿</label></div>
+    <div class="field"><label>每天数量</label><select id="cs-count" class="input">${[1,2,3,4,5].map(n=>`<option value="${n}" ${(s.daily_count||1)===n?'selected':''}>${n} 篇</option>`).join('')}</select></div>
+    <div class="field"><label>执行时间（WSL 本地时间）</label><input id="cs-time" class="input" type="time" value="${esc(s.time||'09:00')}"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveContentSchedule()">保存</button></div>`);
+}
+async function vAutomation(){
+  const cfg=await api('/api/config/'+SLUG);
+  const s=cfg.content_schedule||{};
+  const pub=await api('/api/publish/'+SLUG);
+  const cms=((pub&&pub.publishers)||[]).find(x=>x.code==='wisgate_cms');
+  const ready=!!cms&&!((cms.missing)||[]).length;
+  const last=s.last_run||'';
+  const outcome=s.last_outcome||{},sent=Array.isArray(outcome.published)?outcome.published:[],blocked=Array.isArray(outcome.blocked)?outcome.blocked:[];
+  const outcomePanel=(last||sent.length||blocked.length)?`<div class="card elev" style="padding:20px;margin-top:14px;gap:10px">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap"><div style="font-size:16px;font-weight:600">上一次自动化结果</div><span class="muted" style="font-size:11.5px">${esc(s.last_run_at||last||'—')}</span></div>
+      <div class="row" style="gap:7px;flex-wrap:wrap"><span class="tag pill-good">已推送 ${sent.length} 篇</span><span class="tag ${blocked.length?'pill-warn':'tag-dim'}">未推送 ${blocked.length} 篇</span>${outcome.message?`<span class="muted" style="font-size:12px">${esc(outcome.message)}</span>`:''}</div>
+      ${sent.length?`<div style="padding-top:8px;box-shadow:inset 0 1px 0 var(--line)">${sent.map(item=>`<div class="row" style="gap:9px;padding:7px 0;box-shadow:inset 0 -1px 0 var(--line)"><span class="dot" style="background:var(--a400)"></span><span style="flex:1;font-size:13px">${esc(item.question_id||item.path||'—')}</span><span class="muted" style="font-size:11.5px">已创建 CMS Draft${(item.repaired||[]).length?` · 已自动补齐 ${esc(item.repaired.join('、'))}`:''}</span>${item.url?`<a href="${esc(item.url)}" target="_blank" style="font-size:11.5px;color:var(--a300)">打开 CMS</a>`:''}</div>`).join('')}</div>`:''}
+      ${blocked.length?`<div style="padding-top:8px;box-shadow:inset 0 1px 0 var(--line)"><div style="font-size:12px;color:var(--t500);margin-bottom:4px">未推送原因（内容已保留在本地草稿，可在内容工作台修订）</div>${blocked.map(item=>`<div class="row" style="gap:9px;padding:8px 0;box-shadow:inset 0 -1px 0 var(--line);align-items:flex-start"><span class="dot" style="background:#c99349;margin-top:4px"></span><span style="font-size:13px;min-width:48px">${esc(item.question_id||'—')}</span><span style="font-size:12px;flex:1;line-height:1.5"><b>${esc(item.label||item.reason||'未推送')}</b>${item.detail?`<span class="muted"> · ${esc(item.detail)}</span>`:''}</span>${item.question_id?`<button class="btn btn-ghost" style="font-size:11.5px;white-space:nowrap" onclick="go('workbench',{wq:${esc(JSON.stringify(item.question_id))}})">查看草稿</button>`:''}</div>`).join('')}</div>`:''}
+    </div>`:'';
+  return `<div style="padding:32px 44px 72px;max-width:1040px">
+    ${head('提升 · 内容自动化','每日把新内容送进 CMS 草稿箱','设置一次即可按时运行。系统只使用英文问题库的未重复主题；先补齐抽取块和待补事实，再通过严格检查后创建 CMS 草稿。CMS 中始终保留为 draft，由编辑人工发布。')}
+    <div class="card elev" style="padding:22px;margin-top:22px;border:1px solid ${s.enabled?'var(--accent)':'var(--divider)'};background:${s.enabled?'linear-gradient(105deg,rgba(145,132,217,.15),var(--surface) 56%)':'var(--surface)'}">
+      <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap">
+        <div>
+          <div class="kicker" style="margin-bottom:5px">已生效配置</div>
+          <div style="font-size:20px;font-weight:600">每日自动创建 CMS 草稿</div>
+          <p class="soft" style="font-size:13px;max-width:650px;margin-top:6px">问题库 → 自动去重 → 英文 AI 初稿 → 风险检查 → WisGate CMS Draft。不会自动公开发布。</p>
+        </div>
+        <span class="tag ${s.enabled?'tag-accent':'tag-dim'}" style="font-size:12px">${s.enabled?'自动化已开启':'自动化未开启'}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px;margin:14px 0">
+        <div style="padding:12px;border-radius:var(--r-md);background:var(--deep)"><div class="muted" style="font-size:11px">每日数量</div><div style="font-size:22px;margin-top:3px">${esc(String(s.daily_count||1))} 篇</div></div>
+        <div style="padding:12px;border-radius:var(--r-md);background:var(--deep)"><div class="muted" style="font-size:11px">执行时间</div><div style="font-size:22px;margin-top:3px">${esc(s.time||'09:00')}</div></div>
+        <div style="padding:12px;border-radius:var(--r-md);background:var(--deep)"><div class="muted" style="font-size:11px">最近状态</div><div style="font-size:13px;margin-top:8px">${esc(s.last_result||'尚未运行')}${last?` · ${esc(last)}`:''}</div></div>
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn btn-primary" ${RUNNING?'disabled':''} onclick="runAction('daily-content',{'--limit':${Number(s.daily_count)||1}})">▶ 按当前配置立即运行</button><span class="muted" style="font-size:11.5px">本次会按上方已生效的 ${esc(String(s.daily_count||1))} 篇执行；立即运行同样只创建 CMS 草稿。</span></div>
+    </div>
+    ${outcomePanel}
+
+    <div style="display:grid;grid-template-columns:1.1fr .9fr;gap:14px;margin-top:14px">
+      <div class="card elev" style="padding:20px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px"><div style="font-size:16px;font-weight:600">修改配置</div><span class="muted" style="font-size:11.5px">保存后才会生效</span></div>
+        <div id="automation-unsaved" style="display:none;margin-top:12px;padding:9px 10px;border-radius:var(--r-md);background:rgba(145,132,217,.14);box-shadow:inset 0 0 0 1px var(--accent);font-size:12px;color:var(--a200)">有未保存的修改：上方的已生效配置暂时不会改变。</div>
+        <div class="field" style="margin-top:14px"><label><input id="automation-enabled" type="checkbox" style="width:auto" ${s.enabled?'checked':''} onchange="automationDraftChanged()"> 启用每日自动推送 CMS 草稿</label></div>
+        <div class="field"><label>每天创建多少篇草稿</label><select id="automation-count" class="input" onchange="automationDraftChanged()">${[1,2,3,4,5].map(n=>`<option value="${n}" ${(s.daily_count||1)===n?'selected':''}>${n} 篇</option>`).join('')}</select></div>
+        <div class="field"><label>执行时间（WSL 本地时间）</label><input id="automation-time" class="input" type="time" value="${esc(s.time||'09:00')}" onchange="automationDraftChanged()"></div>
+        <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn btn-primary" onclick="saveAutomationCenter()">保存并应用配置</button></div>
+      </div>
+      <div class="card elev" style="padding:20px;gap:11px">
+        <div style="font-size:16px;font-weight:600">上线前检查</div>
+        <div class="row"><span class="dot" style="background:${ready?'var(--a400)':'#595d6c'}"></span><span style="font-size:13px;flex:1">WisGate CMS 凭证</span><span class="tag ${ready?'pill-good':'pill-warn'}">${ready?'已就绪':'需要配置'}</span></div>
+        <div style="font-size:12px;color:var(--t500);line-height:1.55">${ready?'系统已能创建 CMS 草稿。':'请先在「设置 → 发布渠道 → WisGate CMS」保存 Token 和字段配置。'}</div>
+        <div style="padding-top:10px;box-shadow:inset 0 1px 0 var(--line);font-size:12px;line-height:1.7;color:var(--t500)"><b style="color:var(--t300)">严格推送门槛</b><br>• 仅处理未重复题目<br>• 自动补齐缺失抽取块，仍缺则不推送<br>• 自动核查待补事实，查不到则标为未公开<br>• Global 项目拦截含中文的草稿<br>• 高风险内容不会推送<br>• CMS Status 固定为 draft</div>
+        ${ready?'':`<button class="btn btn-secondary" style="align-self:flex-start;margin-top:2px" onclick="go('settings')">去配置 CMS</button>`}
+      </div>
+    </div>
+  </div>`;
+}
+function automationDraftChanged(){
+  const s=D.content_schedule||{};
+  const changed=$('#automation-enabled').checked!==!!s.enabled
+    || Number($('#automation-count').value)!==Number(s.daily_count||1)
+    || $('#automation-time').value!==(s.time||'09:00');
+  const notice=$('#automation-unsaved');
+  if(notice)notice.style.display=changed?'block':'none';
+}
+async function saveAutomationCenter(){
+  const enabled=$('#automation-enabled').checked,count=Number($('#automation-count').value),time=$('#automation-time').value;
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)){toast('请输入有效时间','err');return}
+  if(enabled&&!confirm(`确认：每天 ${count} 篇，在 ${time} 自动创建 WisGate CMS 草稿？内容不会公开发布，但会调用你的 API 并写入 CMS。`))return;
+  const cfg=await api('/api/config/'+SLUG),old=cfg.content_schedule||{};
+  const r=await post('/api/config/'+SLUG,{content_schedule:{...old,enabled,daily_count:count,time}});
+  toast(r.ok?(enabled?'每日 CMS 草稿已开启':'每日 CMS 草稿已关闭'):'保存失败：'+(r.error||''),r.ok?'':'err');
+  if(r.ok){SET_CFG=null;await load(SLUG,true)}
+}
+async function saveContentSchedule(){
+  const enabled=$('#cs-enabled').checked,count=Number($('#cs-count').value),time=$('#cs-time').value;
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)){toast('请输入有效时间','err');return}
+  if(enabled&&!confirm(`确认：每天 ${count} 篇，在 ${time} 自动创建 WisGate CMS 草稿？内容不会公开发布，但会调用你的 API 并写入 CMS。`))return;
+  const cfg=await api('/api/config/'+SLUG),old=cfg.content_schedule||{};
+  const r=await post('/api/config/'+SLUG,{content_schedule:{...old,enabled,daily_count:count,time}});
+  toast(r.ok?(enabled?'每日 CMS 草稿已开启':'每日 CMS 草稿已关闭'):'保存失败：'+(r.error||''),r.ok?'':'err');
+  if(r.ok){SET_CFG=null;closeModal();render()}
 }
 function editKey(i){
   const k=KEYS[i];
   modal(`<h4 style="font-size:17px">${esc(k.label)}</h4>
     ${k.note?`<p class="muted" style="font-size:12px;margin:4px 0 0">${esc(k.note)}</p>`:''}
+    ${k.name_env?`<div class="field"><label>显示名称（${esc(k.name_env)}，可选）</label>
+      <input id="k-name" class="input" value="${k.name_set?esc(k.label):''}" placeholder="${esc(k.label)}"></div>`:''}
+    ${k.base_env?`<div class="field"><label>API Base URL（${esc(k.base_env)}${k.base_set?'，已配置':''}）</label>
+      <input id="k-base" class="input" value="${k.base_set?esc(k.base):''}" placeholder="${esc(k.base||'https://api.example.com/v1')}"></div>`:''}
+    ${k.path_env?`<div class="field"><label>Chat Completions 路径（${esc(k.path_env)}，可选）</label>
+      <input id="k-path" class="input" value="${k.path_set?esc(k.path):''}" placeholder="${esc(k.path||'chat/completions')}" ></div>`:''}
     <div class="field"><label>API Key（${esc(k.env)}${k.ok===true?'，已配置'+(k.key_tail?'，尾号 '+k.key_tail:''):''}）</label>
       <input id="k-key" class="input" type="password" autocomplete="off"
         placeholder="${k.ok===true?'留空则保持现有 Key 不变':'粘贴 API Key'}"></div>
     ${k.model_env?`<div class="field"><label>模型（${esc(k.model_env)}，留空用默认）</label>
       <input id="k-model" class="input" value="${k.model_set?esc(k.model):''}" placeholder="${esc(k.model)}"></div>`:''}
+    ${k.market_env?`<div class="field"><label>采样市场（${esc(k.market_env)}）</label>
+      <select id="k-market" class="input"><option value="cn" ${k.market==='cn'?'selected':''}>国内（cn）</option><option value="global" ${k.market==='global'?'selected':''}>全球（global）</option></select></div>`:''}
     <div class="row" style="justify-content:flex-end;margin-top:12px">
       ${k.ok===true?`<button class="btn btn-ghost" style="margin-right:auto" onclick="if(confirm('确定从 .env 删除 ${esc(k.env)}？'))saveKey(${i},true)">清除 Key</button>`:''}
       <button class="btn btn-secondary" onclick="closeModal()">取消</button>
@@ -2024,9 +2422,25 @@ async function saveKey(i,clear){
   const k=KEYS[i],u={};
   if(clear)u[k.env]='';
   else{const v=$('#k-key').value.trim();if(v)u[k.env]=v}
+  if(k.name_env&&!clear){
+    const n=$('#k-name').value.trim();
+    if(n!==(k.name_set?k.label:''))u[k.name_env]=n;
+  }
+  if(k.base_env&&!clear){
+    const b=$('#k-base').value.trim();
+    if(b!==(k.base_set?k.base:''))u[k.base_env]=b;
+  }
+  if(k.path_env&&!clear){
+    const p=$('#k-path').value.trim();
+    if(p!==(k.path_set?k.path:''))u[k.path_env]=p;
+  }
   if(k.model_env&&!clear){
     const m=$('#k-model').value.trim();
     if(m!==(k.model_set?k.model:''))u[k.model_env]=m;
+  }
+  if(k.market_env&&!clear){
+    const market=$('#k-market').value;
+    if(market!==k.market)u[k.market_env]=market;
   }
   if(!Object.keys(u).length){closeModal();return}
   const r=await post('/api/keys',{updates:u});
@@ -2277,8 +2691,8 @@ async function asSave(){
 /* ===================== 框架 ===================== */
 const VIEWS={overview:vOverview,engines:vEngines,competitors:vCompetitors,questions:vQuestions,
   siteaudit:vSiteAudit,assets:vAssets,
-  gaps:vGaps,channels:vChannels,facts:vFacts,plan:vPlan,workbench:vWorkbench,
-  verify:vVerify,report:vReport,settings:vSettings,onboard:vOnboard};
+  gaps:vGaps,channels:vChannels,facts:vFacts,plan:vPlan,workbench:vWorkbench,assistant:vAssistant,
+  automation:vAutomation,verify:vVerify,report:vReport,settings:vSettings,onboard:vOnboard};
 async function render(){
   renderSide();
   const fn=VIEWS[R]||vOverview;

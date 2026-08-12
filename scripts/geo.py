@@ -29,10 +29,10 @@ except ModuleNotFoundError as e:
 
 
 DEFAULT_PLATFORMS = {
-    "cn": ["glm", "doubao", "deepseek", "kimi", "minimax", "nano_ai", "baidu"],
-    "global": ["gemini", "openai", "claude", "grok", "perplexity", "chatgpt"],
+    "cn": ["glm", "doubao", "deepseek", "kimi", "minimax", "custom", "nano_ai", "baidu"],
+    "global": ["gemini", "openai", "claude", "grok", "perplexity", "custom", "chatgpt"],
     "both": ["glm", "doubao", "deepseek", "kimi", "minimax", "nano_ai", "baidu",
-             "gemini", "openai", "claude", "grok", "perplexity", "chatgpt"],
+             "gemini", "openai", "claude", "grok", "perplexity", "custom", "chatgpt"],
 }
 
 
@@ -292,7 +292,35 @@ def cmd_generate(a):
     import generate
 
     generate.run(a.slug, which=a.asset.split(",") if a.asset else None,
-                 with_draft=a.draft, draft_limit=a.draft_limit)
+                 with_draft=a.draft, draft_limit=a.draft_limit,
+                 draft_question=a.question)
+
+
+def cmd_auto_drafts(a):
+    import generate
+    result = generate.auto_drafts(a.slug, a.limit)
+    print(f"自动内容队列：生成 {len(result['generated'])} 篇；跳过 {len(result['skipped'])} 篇")
+
+
+def cmd_clean_global_questions(a):
+    import bootstrap
+    result = bootstrap.clean_global_questions(a.slug)
+    if not result.get("ok"):
+        G.die(result["error"])
+    print(f"Global 问题库已清理：保留 {result['kept']} 题，移出 {result['removed']} 题中文或非 Global 条目")
+
+
+def cmd_daily_content(a):
+    import content_schedule
+    result = content_schedule.run(a.slug, a.limit)
+    if not result.get("ok"):
+        G.die(result["error"])
+    print(result.get("message", "每日内容任务完成"))
+    for item in result.get("published", []):
+        print(f"  CMS draft: {item['path']}")
+    for item in result.get("blocked", []):
+        print(f"  not pushed: {item['path']} · {item.get('label', item['reason'])}"
+              + (f" · {item['detail']}" if item.get("detail") else ""))
 
 
 def cmd_lint(a):
@@ -312,6 +340,14 @@ def cmd_lint(a):
             print(f"    [{i['level']}] {i['type']}：{i['detail']}")
             print(f"          …{i['excerpt'][:76]}")
     print("\n高风险项必须处理后才能发布；未核实数字需补来源与核验日期。\n")
+
+
+def cmd_smoke(a):
+    import smoke
+
+    result = smoke.run(a.slug, a.url, a.question, a.check_api)
+    if not result["ok"]:
+        raise SystemExit(1)
 
 
 def cmd_verify(a):
@@ -535,14 +571,37 @@ def main():
 
     s = sub.add_parser("generate", help="产出可直接部署的资产（llms.txt/JSON-LD/片段/大纲）")
     s.add_argument("--slug", required=True)
-    s.add_argument("--asset", help="逗号分隔：llms,jsonld,snippets,outlines")
+    s.add_argument("--asset", help="逗号分隔：llms,jsonld,snippets,outlines,drafts（drafts 复用已有大纲）")
     s.add_argument("--draft", action="store_true", help="额外调用 LLM 出文章初稿")
     s.add_argument("--draft-limit", type=int, default=3, dest="draft_limit")
+    s.add_argument("--question", help="只为指定问题 ID 生成初稿（需同时使用 --draft）")
     s.set_defaults(func=cmd_generate)
 
     s = sub.add_parser("lint", help="检查 AI 初稿的编造风险（发布/交付前必跑）")
     s.add_argument("--slug", required=True)
     s.set_defaults(func=cmd_lint)
+
+    s = sub.add_parser("auto-drafts", help="自动生成下一批未重复的 AI 初稿（不会发布）")
+    s.add_argument("--slug", required=True)
+    s.add_argument("--limit", type=int, default=3)
+    s.set_defaults(func=cmd_auto_drafts)
+
+    s = sub.add_parser("clean-global-questions", help="清理 Global 项目中遗留的中文问题（自动备份）")
+    s.add_argument("--slug", required=True)
+    s.set_defaults(func=cmd_clean_global_questions)
+
+    s = sub.add_parser("daily-content", help="生成下一批未重复初稿并创建 WisGate CMS 草稿（不会公开发布）")
+    s.add_argument("--slug", required=True)
+    s.add_argument("--limit", type=int, default=None)
+    s.set_defaults(func=cmd_daily_content)
+
+    s = sub.add_parser("smoke", help="上线后验收看板与内容工作台（只读）")
+    s.add_argument("--slug", required=True)
+    s.add_argument("--url", default="http://127.0.0.1:8765")
+    s.add_argument("--question", help="指定用于工作台验收的问题 ID")
+    s.add_argument("--check-api", action="store_true", dest="check_api",
+                   help="额外发送一次最小 API 请求，会消耗少量额度")
+    s.set_defaults(func=cmd_smoke)
 
     s = sub.add_parser("verify", help="重抓并自动验收工单")
     s.add_argument("--slug", required=True)
@@ -557,7 +616,8 @@ def main():
     s = sub.add_parser("publish", help="把成稿/资产发布到已配置的渠道（永远手动触发）")
     s.add_argument("--slug", required=True)
     s.add_argument("--path", required=True, help="content/ 或 assets/ 下的相对路径")
-    s.add_argument("--platform", required=True, choices=["github", "wordpress", "wechat_draft", "webhook"])
+    s.add_argument("--platform", required=True,
+                   choices=["github", "wordpress", "wechat_draft", "webhook", "wisgate_cms"])
     s.add_argument("--title")
     s.set_defaults(func=cmd_publish)
 

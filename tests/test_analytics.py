@@ -72,6 +72,28 @@ class TestHealthCite(Base):
         self.assertEqual(h["subs"]["cite"], 0.0)
 
 
+class TestPrecheckFaqRecognition(unittest.TestCase):
+    def test_recognizes_frequently_asked_questions_heading(self):
+        text = """# API guide
+
+## Frequently Asked Questions
+
+### Does this work with existing clients?
+Yes, when the documented API contract is followed.
+
+### Where can I verify current availability?
+Check the official product documentation before implementation.
+
+### What should a team review before publishing?
+Review claims and source links.
+"""
+        self.assertTrue(A.precheck(text)["blocks"]["FAQ"])
+
+    def test_recognizes_common_questions_and_q_and_a_headings(self):
+        self.assertTrue(A.precheck("## Common Questions\n\n### What is covered?\nA direct answer.")["blocks"]["FAQ"])
+        self.assertTrue(A.precheck("## Questions & Answers\n\n### What is covered?\nA direct answer.")["blocks"]["FAQ"])
+
+
 class TestVerdict(Base):
     def test_single_platform_no_best_claim(self):
         self.make_project()

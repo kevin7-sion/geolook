@@ -93,7 +93,8 @@ PROVIDERS = {
     },
     "openai": {
         "name": "OpenAI(ChatGPT)", "market": "global",
-        "base": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "base": "https://api.openai.com/v1",
+        "base_env": "OPENAI_BASE_URL",
         "model": "gpt-4o-mini",
         "model_env": "OPENAI_MODEL",
         "key_env": "OPENAI_API_KEY",
@@ -129,6 +130,16 @@ PROVIDERS = {
         "search": True,
         "note": "原生联网并返回 citations，海外采样里证据质量最好的一个",
     },
+    "custom": {
+        "name": "自定义 OpenAI 兼容 API", "name_env": "CUSTOM_API_NAME",
+        "market": "global", "market_env": "CUSTOM_API_MARKET",
+        "base": "", "base_env": "CUSTOM_API_BASE_URL",
+        "path": "chat/completions", "path_env": "CUSTOM_API_CHAT_PATH",
+        "model": "", "model_env": "CUSTOM_API_MODEL",
+        "key_env": "CUSTOM_API_KEY",
+        "search": False,
+        "note": "适用于支持 /chat/completions 的自建、代理或第三方 API；结果按 API 样本记录，不等同于网页端结果。",
+    },
 }
 
 # 没有公开联网问答 API 的平台，只能浏览器/人工采
@@ -143,7 +154,7 @@ MANUAL_ONLY = {
 
 def market_of(platform: str) -> str:
     if platform in PROVIDERS:
-        return PROVIDERS[platform]["market"]
+        return _p_market(PROVIDERS[platform])
     if platform in MANUAL_ONLY:
         return MANUAL_ONLY[platform][1]
     # 未识别的平台代码（多半是笔误）：绝不默认并入国内，标记 unknown 不进任何市场统计
@@ -153,7 +164,7 @@ def market_of(platform: str) -> str:
 
 def label_of(platform: str) -> str:
     if platform in PROVIDERS:
-        return PROVIDERS[platform]["name"]
+        return _p_name(PROVIDERS[platform])
     if platform in MANUAL_ONLY:
         return MANUAL_ONLY[platform][0]
     return platform
@@ -182,24 +193,68 @@ def _p_model(p: dict) -> str:
     return (os.environ.get(menv) if menv else None) or p["model"]
 
 
+def _p_base(p: dict) -> str:
+    """调用时解析 API 地址，避免看板修改后仍使用导入时的旧地址。"""
+    benv = p.get("base_env")
+    return ((os.environ.get(benv) if benv else None) or p["base"]).rstrip("/")
+
+
+def _p_chat_url(p: dict) -> str:
+    """Build the chat-completions URL without assuming every gateway uses /v1."""
+    penv = p.get("path_env")
+    path = ((os.environ.get(penv) if penv else None) or p.get("path", "chat/completions"))
+    path = str(path).strip().strip("/")
+    return f"{_p_base(p)}/{path}" if path else _p_base(p)
+
+
+def _p_name(p: dict) -> str:
+    nenv = p.get("name_env")
+    return (os.environ.get(nenv) if nenv else None) or p["name"]
+
+
+def _p_market(p: dict) -> str:
+    menv = p.get("market_env")
+    value = (os.environ.get(menv) if menv else None) or p["market"]
+    return value if value in ("cn", "global") else p["market"]
+
+
 def model_for(platform: str) -> str:
     return _p_model(PROVIDERS[platform])
 
 
 def available(platform: str) -> bool:
     p = PROVIDERS.get(platform)
-    return bool(p and os.environ.get(p["key_env"]))
+    if not p or not os.environ.get(p["key_env"]):
+        return False
+    # 自定义端点只有 Key 不足以运行，避免把配置不完整误显示为可用。
+    if platform == "custom":
+        return bool(_p_base(p) and _p_model(p))
+    return True
 
 
 # 所有「挑一个可用 LLM 干活」的模块（bootstrap/expand/generate）共用这一条候选链，
 # 避免各写一份后悄悄漂移。顺序：便宜的国内引擎优先。
-LLM_PREFS = ("deepseek", "glm", "doubao", "openai", "gemini")
+LLM_PREFS = ("deepseek", "glm", "doubao", "openai", "gemini", "custom")
 
 
 def pick_llm(prefer: str | None = None):
     """按候选链返回第一个配了 Key 的平台；都没配返回 None。"""
     cands = [prefer] if prefer else list(LLM_PREFS)
     return next((c for c in cands if c and available(c)), None)
+
+
+def retryable_api_error(status: int, text: str) -> bool:
+    """判断上游是否暂时不可用。
+
+    部分 OpenAI 兼容网关错误地用 403 包装排队/过载，例如
+    ``System busy, please try again later``。这不代表 Key 无权限，
+    应与 429/5xx 一样做有限退避；普通 403 仍然立即返回，避免无效重试。
+    """
+    if status == 429 or status >= 500:
+        return True
+    return status == 403 and bool(re.search(
+        r"system\s+busy|try\s+again\s+later|temporarily\s+unavailable|overloaded|capacity",
+        text or "", re.I))
 
 
 def ask_ark(p: dict, key: str, question: str, timeout: int) -> dict:
@@ -260,7 +315,7 @@ def ask_anthropic(p: dict, key: str, question: str, timeout: int) -> dict:
                 timeout=timeout,
             )
             if r.status_code != 200:
-                if (r.status_code == 429 or r.status_code >= 500) and attempt < len(delays):
+                if retryable_api_error(r.status_code, r.text) and attempt < len(delays):
                     time.sleep(delays[attempt])
                     continue
                 return {"ok": False, "answer": "", "error": f"HTTP {r.status_code}: {r.text[:300]}"}
@@ -285,6 +340,11 @@ def ask(platform: str, question: str, timeout: int = 120) -> dict:
     key = os.environ.get(p["key_env"])
     if not key:
         return {"ok": False, "answer": "", "error": f"缺少环境变量 {p['key_env']}"}
+    base = _p_base(p)
+    if not base:
+        return {"ok": False, "answer": "", "error": "缺少 API Base URL"}
+    if not _p_model(p):
+        return {"ok": False, "answer": "", "error": "缺少模型名称"}
     if p.get("protocol") == "ark":
         return ask_ark(p, key, question, timeout)
     if p.get("protocol") == "anthropic":
@@ -299,14 +359,14 @@ def ask(platform: str, question: str, timeout: int = 120) -> dict:
     for attempt in range(len(delays) + 1):
         try:
             r = requests.post(
-                f"{p['base']}/chat/completions",
+                _p_chat_url(p),
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json=body,
                 timeout=timeout,
             )
             if r.status_code != 200:
                 err = {"ok": False, "answer": "", "error": f"HTTP {r.status_code}: {r.text[:300]}"}
-                if (r.status_code == 429 or r.status_code >= 500) and attempt < len(delays):
+                if retryable_api_error(r.status_code, r.text) and attempt < len(delays):
                     time.sleep(delays[attempt])
                     continue
                 return err
@@ -544,6 +604,9 @@ def run(slug: str, platforms: list[str] | None = None, repeat: int = 1, limit: i
         G.die("geo.json 里还没有问题库，先让 Claude 生成 questions（见 SKILL.md 步骤 2）")
 
     plats = platforms or [p for p in cfg.get("platforms", []) if p in PROVIDERS]
+    # 新增自定义端点后，已有项目的 geo.json 不需要迁移也能立即使用。
+    if platforms is None and available("custom") and "custom" not in plats:
+        plats.append("custom")
     runnable = [p for p in plats if available(p)]
     skipped = [p for p in plats if not available(p)]
     if skipped:
@@ -577,7 +640,7 @@ def run(slug: str, platforms: list[str] | None = None, repeat: int = 1, limit: i
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         rec = {
             "date": G.today(), "ts": G.now_iso(),
-            "platform": plat, "platform_name": PROVIDERS[plat]["name"],
+            "platform": plat, "platform_name": label_of(plat),
             "market": market_of(plat), "terminal": "api", "sample_mode": "api",
             "evidence_level": "B_api_可复现",
             "search_enabled": res.get("searched", PROVIDERS[plat].get("search", False)),

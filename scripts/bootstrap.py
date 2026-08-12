@@ -23,6 +23,28 @@ import geolib as G
 GROUPS = ["推荐", "比较", "替代", "价格", "风险", "品牌验证", "场景"]
 
 
+def is_english_question(text: str) -> bool:
+    """A Global question must be an English reader query, not merely global-tagged."""
+    return bool(str(text or "").strip()) and not bool(re.search(r"[\u3400-\u9fff]", str(text)))
+
+
+def clean_global_questions(slug: str) -> dict:
+    """Remove legacy Chinese/non-Global rows with a recoverable backup."""
+    cfg = G.load_config(slug)
+    if cfg.get("market") != "global":
+        return {"ok": False, "error": "仅 Global 项目可清理中文问题", "removed": 0}
+    old = cfg.get("questions", []) or []
+    keep = [q for q in old if q.get("market") == "global" and is_english_question(q.get("text", ""))]
+    removed = [q for q in old if q not in keep]
+    if removed:
+        history = G.project_dir(slug) / "history"
+        history.mkdir(parents=True, exist_ok=True)
+        G.write_json(history / f"questions-before-global-language-cleanup-{G.today()}.json", old)
+        cfg["questions"] = keep
+        G.save_config(slug, cfg)
+    return {"ok": True, "removed": len(removed), "kept": len(keep)}
+
+
 def _site_digest(slug: str, limit: int = 14000) -> str:
     """把抓到的页面正文压成一份摘要喂给 LLM。首页和高分页优先。"""
     pages = G.read_jsonl(G.project_dir(slug) / "evidence" / "pages.jsonl")
@@ -153,7 +175,8 @@ def question_bank(brand: dict, market: str) -> list[dict]:
     for q in qs:
         t = (q.get("text") or "").strip()
         mk = q.get("market") if q.get("market") in ("cn", "global", "both") else market
-        if not t or t in seen or (market != "both" and mk not in (market, "both")):
+        if (not t or t in seen or (market != "both" and mk not in (market, "both"))
+                or (mk == "global" and not is_english_question(t))):
             continue
         seen.add(t)
         out.append({"id": q.get("id") or f"q{len(out)+1:03d}",

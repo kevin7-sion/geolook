@@ -288,6 +288,8 @@ def _diagnose(m, rank_med, rival, rival_rate, neg_n):
 
 def questions(slug: str, rows_latest, bp: dict | None) -> list[dict]:
     cfg = G.load_config(slug)
+    import content_registry
+    registry = {x["question_id"]: x for x in content_registry.build(slug)["records"]}
     status = {c["id"]: c["status"] for c in (bp or {}).get("contents", [])}
     byq: dict[str, list] = {}
     for r in rows_latest:
@@ -303,6 +305,8 @@ def questions(slug: str, rows_latest, bp: dict | None) -> list[dict]:
 
     out = []
     for q in cfg.get("questions", []):
+        if cfg.get("market") == "global" and (q.get("market") != "global" or re.search(r"[\u3400-\u9fff]", q.get("text", ""))):
+            continue
         rs = byq.get(q.get("id"), [])
         m = _mention(rs)
         probe = is_probe(q, rs)
@@ -323,7 +327,9 @@ def questions(slug: str, rows_latest, bp: dict | None) -> list[dict]:
                         m, _median(ranks),
                         top[0] if top else None,
                         (top[1] / len(rs)) if top and rs else 0, neg_n),
-                    "content": status.get(q.get("id"), "缺口")})
+                    "content": status.get(q.get("id"), registry.get(q.get("id"), {}).get("status", "缺口")),
+                    "content_status": registry.get(q.get("id"), {}).get("status", "not_started"),
+                    "duplicate": registry.get(q.get("id"), {}).get("duplicate")})
     # 未提及 + 无内容的排最前——这就是选题池；probe 题单独归「品牌认知」，不参与缺口排序
     out.sort(key=lambda x: (x["brand_probe"], (x["mention"] or 0), x["content"] == "已成稿"))
     return out
@@ -419,9 +425,16 @@ def precheck(text: str) -> dict:
     body = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     wc = G.word_count(body)
     h2 = len(re.findall(r"^##\s|^<h2", body, re.M))
+    # A visible "待确认：3 个指标" is honest, but it is not a numeric fact and
+    # must not make the content pass the evidence-oriented extraction check.
+    verified_numbers = sum(
+        len(A.RE_NUMBER.findall(line))
+        for line in body.splitlines()
+        if not re.search(r"待确认|待补|\bTBD\b|to be confirmed", line, re.I)
+    )
     blocks = {
         "定义": bool(A.RE_DEFINITION.search(body)),
-        "数字事实": len(A.RE_NUMBER.findall(body)) >= 3,
+        "数字事实": verified_numbers >= 3,
         "对比": bool(A.RE_COMPARE.search(body)) or bool(re.search(r"^\|.*\|$", body, re.M)),
         "操作步骤": bool(A.RE_HOWTO.search(body)),
         "FAQ": bool(A.RE_FAQ.search(body)),
@@ -433,4 +446,5 @@ def precheck(text: str) -> dict:
     checks = [{"t": f"「{k}」块", "ok": v, "lift": BLOCK_LIFT[k]} for k, v in blocks.items()]
     checks.insert(0, {"t": f"正文 {wc} 词（门槛 1000）", "ok": wc >= 1000, "lift": ""})
     checks.insert(1, {"t": f"H2 小节 {h2} 个（目标 ≥6）", "ok": h2 >= 6, "lift": ""})
-    return {"grade": grade, "wc": wc, "h2": h2, "blocks": blocks, "checks": checks}
+    return {"grade": grade, "wc": wc, "h2": h2, "blocks": blocks,
+            "verified_numbers": verified_numbers, "checks": checks}
