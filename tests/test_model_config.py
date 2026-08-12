@@ -18,7 +18,9 @@ import sample as S
 
 ALL_KEY_ENVS = [p["key_env"] for p in S.PROVIDERS.values()]
 ALL_MODEL_ENVS = [p["model_env"] for p in S.PROVIDERS.values() if p.get("model_env")]
-_CLEAR = {k: "" for k in ALL_KEY_ENVS + ALL_MODEL_ENVS}
+ALL_RUNTIME_ENVS = [p[k] for p in S.PROVIDERS.values()
+                    for k in ("base_env", "name_env", "market_env") if p.get(k)]
+_CLEAR = {k: "" for k in ALL_KEY_ENVS + ALL_MODEL_ENVS + ALL_RUNTIME_ENVS}
 
 
 def no_llm_env():
@@ -70,6 +72,50 @@ class TestModelResolution(unittest.TestCase):
             res = S.ask("deepseek", "hi")
         self.assertFalse(res["ok"])
         self.assertIn("DEEPSEEK_API_KEY", res["error"])
+
+    def test_custom_provider_uses_runtime_endpoint_model_and_label(self):
+        captured = {}
+
+        def fake_post(url, **kw):
+            captured["url"] = url
+            captured["model"] = kw["json"]["model"]
+
+            class R:
+                status_code = 200
+
+                @staticmethod
+                def json():
+                    return {"choices": [{"message": {"content": "ok"}}]}
+            return R()
+
+        env = {"CUSTOM_API_KEY": "custom-key", "CUSTOM_API_BASE_URL": "https://llm.example/v1/",
+               "CUSTOM_API_CHAT_PATH": "chat/completions",
+               "CUSTOM_API_MODEL": "my-model", "CUSTOM_API_NAME": "My LLM",
+               "CUSTOM_API_MARKET": "cn"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertTrue(S.available("custom"))
+            self.assertEqual(S.market_of("custom"), "cn")
+            self.assertEqual(S.label_of("custom"), "My LLM")
+            with mock.patch.object(S.requests, "post", side_effect=fake_post):
+                res = S.ask("custom", "hi", timeout=5)
+        self.assertTrue(res["ok"])
+        self.assertEqual(captured["url"], "https://llm.example/v1/chat/completions")
+        self.assertEqual(captured["model"], "my-model")
+
+    def test_custom_provider_supports_versioned_chat_path(self):
+        with mock.patch.dict(os.environ, {"CUSTOM_API_KEY": "k",
+                                          "CUSTOM_API_BASE_URL": "https://llm.example",
+                                          "CUSTOM_API_CHAT_PATH": "v1/chat/completions",
+                                          "CUSTOM_API_MODEL": "m"}, clear=False):
+            with mock.patch.object(S.requests, "post", return_value=mock.Mock(
+                    status_code=200, json=lambda: {"choices": [{"message": {"content": "ok"}}]})) as post:
+                self.assertTrue(S.ask("custom", "hi")["ok"])
+        self.assertEqual(post.call_args.args[0], "https://llm.example/v1/chat/completions")
+
+    def test_custom_provider_requires_complete_configuration(self):
+        with no_llm_env():
+            with mock.patch.dict(os.environ, {"CUSTOM_API_KEY": "custom-key"}):
+                self.assertFalse(S.available("custom"))
 
 
 class TestPickLLM(unittest.TestCase):

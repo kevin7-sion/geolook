@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -21,52 +22,52 @@ import requests
 
 import geolib as G
 
-# 渠道注册表：env 是 .env 里的凭证变量；cfg 是存在项目 geo.json publishing.<code> 的非敏感配置。
-# market：general 通用 / cn 国内 / global 海外，发布渠道页按此分组。
-#
-# 准入纪律：只接有官方可用发布 API 的平台，宁缺毋滥。微博（开放平台发布接口需企业应用
-# 审核）、搜狐号/头条号/小红书/B站专栏（无公开发布 API）、LinkedIn（三方 OAuth + token
-# 60 天过期）、Facebook 个人主页（接口已废弃）、Instagram（需企业号且不支持纯文本）均不
-# 接入——Cookie 模拟发布违反各家 ToS 且极易失效，不进本产品；这些平台走人工发布或用
-# 自定义 Webhook 桥接你自己的工具。
+# 渠道注册表：env 是 .env 里的凭证变量；cfg 是存在项目 geo.json publishing.<code> 的非敏感配置
 PUBLISHERS = {
     "github": {
-        "name": "GitHub 仓库", "market": "general", "env": ["GITHUB_TOKEN"],
+        "name": "GitHub 仓库", "env": ["GITHUB_TOKEN"],
         "cfg": [("repo", "owner/repo"), ("branch", "main"), ("dir", "docs/geo")],
         "note": "Contents API 提交 markdown 到你的仓库（配 Pages/静态站即上线）",
-        "guide": {"url": 'https://github.com/settings/tokens', "steps": ['github.com/settings/tokens 生成 Token（Fine-grained 或 classic 勾 repo 权限），只授权目标仓库', 'GITHUB_TOKEN 填生成的 token；repo 填 owner/repo，dir 是仓库内目录', '仓库开 GitHub Pages（Settings→Pages）后，文章提交即上线，URL 记入发布记录']},
     },
     "wordpress": {
-        "name": "WordPress", "market": "general", "env": ["WP_USER", "WP_APP_PASSWORD"],
+        "name": "WordPress", "env": ["WP_USER", "WP_APP_PASSWORD"],
         "cfg": [("site_url", "https://blog.example.com")],
         "note": "REST API 新建草稿文章，登录后台确认后再发布",
-        "guide": {"url": 'https://wordpress.org/documentation/article/application-passwords/', "steps": ['WP 后台 → 用户 → 个人资料 → 底部「应用程序密码」生成一个（需 WP 5.6+）', 'WP_USER 填登录用户名，WP_APP_PASSWORD 填生成的密码（含空格原样填）', 'site_url 填站点根地址；发布后是草稿，登录后台确认再对外']},
-    },
-    "webhook": {
-        "name": "自定义 Webhook", "market": "general", "env": ["PUBLISH_WEBHOOK_URL"],
-        "cfg": [],
-        "note": "POST JSON {title, markdown, html, slug, path} 到你自己的接收端——没有官方 API 的平台用它桥接",
-        "guide": {"url": '', "steps": ['起一个能收 POST JSON 的 HTTP 端点（自己的服务、n8n、云函数都行）', 'PUBLISH_WEBHOOK_URL 填端点地址；收到 {title, markdown, html, path}', '端点返回 {"url": "..."} 时会记为发布落点链接']},
     },
     "wechat_draft": {
-        "name": "公众号草稿箱", "market": "cn", "env": ["WECHAT_APPID", "WECHAT_APPSECRET"],
+        "name": "公众号草稿箱", "env": ["WECHAT_APPID", "WECHAT_APPSECRET"],
         "cfg": [("thumb_media_id", "永久素材封面 media_id（草稿必需）")],
         "note": "新建草稿，需在公众号后台预览并群发；服务器 IP 要在白名单",
-        "guide": {"url": 'https://mp.weixin.qq.com', "steps": ['公众号后台 → 设置与开发 → 基本配置：拿 AppID / AppSecret', '同页「IP 白名单」加上本机出口 IP（不加会报 40164）', '素材库上传一张封面图，拿永久素材 media_id 填 thumb_media_id（草稿必需）', '发布后到后台「草稿箱」预览、群发']},
     },
-    "x": {
-        "name": "X（推文引流）", "market": "global",
-        "env": ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"],
-        "cfg": [("link_url", "文章公开链接（留空则自动用该文件最近一次 GitHub/WordPress 发布的 URL）")],
-        "note": "API v2 发一条「标题 + 摘要 + 链接」的推文引流，不是发全文；developer.x.com 建应用取四个凭证",
-        "guide": {"url": 'https://developer.x.com/en/portal/dashboard', "steps": ['developer.x.com 申请开发者账号（Free 档即可发推），创建一个 App', 'App 的 User authentication settings 里开启 Read and Write 权限', 'Keys and tokens 页生成四个值：API Key/Secret（Consumer）+ Access Token/Secret', '注意：权限改成 Read/Write 之后要重新生成 Access Token，否则仍是只读', 'link_url 留空时自动用该文件最近一次 GitHub/WordPress 发布的 URL 作回链']},
+    "webhook": {
+        "name": "自定义 Webhook", "env": ["PUBLISH_WEBHOOK_URL"],
+        "cfg": [],
+        "note": "POST JSON {title, markdown, html, slug, path} 到你自己的接收端",
     },
-    "reddit": {
-        "name": "Reddit（全文自帖）", "market": "global",
-        "env": ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD"],
-        "cfg": [("subreddit", "发到哪个 subreddit（不带 r/）")],
-        "note": "script 应用密码授权，markdown 全文作为 self-post；注意目标社区的自我推广规则",
-        "guide": {"url": 'https://www.reddit.com/prefs/apps', "steps": ['reddit.com/prefs/apps → create app → 类型选「script」', 'REDDIT_CLIENT_ID 是应用名下方那串字符，SECRET 在旁边', '用户名密码就是登录凭证；账号开了两步验证会失败，建议用专用账号', 'subreddit 先用自己的主页社区（u_你的用户名）试发，再进目标社区——先读对方的自我推广规则']},
+    "wisgate_cms": {
+        "name": "WisGate CMS",
+        "env": ["WISGATE_CMS_TOKEN"],
+        "cfg": [
+            ("api_base_url", "https://cms.wisgate.ai"),
+            ("collection", "blogs"),
+            ("title_field", "title"),
+            ("body_field", "content"),
+            ("body_format", "markdown（WisGate CMS 固定格式；旧的 html 设置会自动迁移）"),
+            ("slug_field", "slug"),
+            ("status_field", "status"),
+            ("draft_value", "draft"),
+            ("cover_image_field", "cover_image（留空则不写入）"),
+            ("cover_image_value", "Directus 文件 ID；留空不设置封面"),
+            ("summary_field", "summary"),
+            ("publish_time_field", "publish_time"),
+            ("tags_field", "tags"),
+            ("tags_format", "json 或 csv"),
+            ("additional_tags", "可选，逗号分隔；会与自动标签合并"),
+            ("platform_field", "platform"),
+            ("platform_value", "wisdom-gate"),
+            ("model_field", "model（默认留空）"),
+        ],
+        "note": "创建含摘要、标签、时间和平台信息的博客草稿；Token 只保存在本机 .env，不会在看板回显",
     },
 }
 
@@ -193,115 +194,276 @@ def _pub_webhook(cfg, text, title, fname):
     return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
 
 
-# ---------------------------------------------------------------- X (OAuth 1.0a)
-
-def _oauth1_header(method: str, url: str, ck: str, cs: str, tk: str, ts: str) -> str:
-    """OAuth 1.0a 签名头（HMAC-SHA1，纯标准库）。v2 发推的请求体是 JSON，
-    不参与签名，只签 oauth_* 参数本身。"""
-    import hashlib
-    import hmac
-    import secrets
-    import time as _t
-    from urllib.parse import quote
-
-    q = lambda s: quote(str(s), safe="~")
-    p = {
-        "oauth_consumer_key": ck, "oauth_token": tk,
-        "oauth_signature_method": "HMAC-SHA1", "oauth_version": "1.0",
-        "oauth_timestamp": str(int(_t.time())), "oauth_nonce": secrets.token_hex(16),
-    }
-    base = "&".join([method.upper(), q(url),
-                     q("&".join(f"{q(k)}={q(v)}" for k, v in sorted(p.items())))])
-    key = f"{q(cs)}&{q(ts)}"
-    sig = base64.b64encode(hmac.new(key.encode(), base.encode(), hashlib.sha1).digest()).decode()
-    p["oauth_signature"] = sig
-    return "OAuth " + ", ".join(f'{q(k)}="{q(v)}"' for k, v in sorted(p.items()))
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _latest_public_url(recs: list, fname: str) -> str:
-    """该文件最近一次长文渠道（GitHub/WordPress/Webhook）发布成功的 URL——
-    社交渠道引流的默认回链：先发长文，再发社交。"""
-    for r in reversed(recs or []):
-        if r.get("ok") and r.get("url") and r.get("path", "").endswith(fname) \
-                and r.get("platform") in ("github", "wordpress", "webhook"):
-            return r["url"]
-    return ""
+def _cms_ident(value: str, name: str, default: str) -> str:
+    value = str(value or default).strip()
+    if not _IDENT.fullmatch(value):
+        raise ValueError(f"{name} 必须是字母、数字、下划线组成的字段名")
+    return value
 
 
-def _x_len(s: str) -> int:
-    """X 的加权长度：CJK/全角计 2，其余计 1（URL 另算固定 23）。"""
-    return sum(2 if ord(c) > 0x2E80 else 1 for c in s)
+def _cms_slug(title: str, fname: str) -> str:
+    raw = title or fname.rsplit(".", 1)[0]
+    value = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    if value:
+        return value
+    # Chinese-only or punctuation-only titles need a deterministic ASCII slug.
+    digest = hashlib.sha256(raw.encode("utf-8", "ignore")).hexdigest()[:12]
+    return f"geolook-{digest}"
 
 
-def _x_trim(s: str, budget: int) -> str:
-    out, used = [], 0
-    for c in s:
-        w = 2 if ord(c) > 0x2E80 else 1
-        if used + w > budget:
+def _cms_plaintext(markdown: str) -> str:
+    value = re.sub(r"<!--.*?-->", "", markdown, flags=re.S)
+    value = re.sub(r"^---\s*$.*?^---\s*$", "", value, flags=re.M | re.S)
+    value = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", value)
+    value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
+    value = re.sub(r"[`*_#>|]", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _cms_summary(markdown: str, title: str) -> str:
+    """Use the first reader-facing paragraph as concise CMS summary metadata."""
+    text = re.sub(r"<!--.*?-->", "", markdown, flags=re.S)
+    text = re.sub(r"^---\s*$.*?^---\s*$", "", text, flags=re.M | re.S)
+    paragraphs = re.split(r"\n\s*\n", text)
+    for paragraph in paragraphs:
+        candidate = paragraph.strip()
+        if not candidate or candidate.startswith("#") or candidate.startswith("|"):
+            continue
+        candidate = _cms_plaintext(candidate)
+        if candidate:
+            return candidate[:240].rstrip(" ,;:-")
+    return _cms_plaintext(title)[:240]
+
+
+def _cms_markdown(markdown: str) -> str:
+    """Remove GeoLook-only comments before a finished article reaches a CMS."""
+    return re.sub(r"<!--.*?-->\s*", "", markdown, flags=re.S).strip() + "\n"
+
+
+def _cms_tag(value: str) -> str:
+    """Return a short phrase suitable for a CMS tag, or an empty string."""
+    value = re.sub(r"[`*_#]|\[[^\]]*\]\([^)]+\)", "", str(value or ""))
+    value = re.sub(r"\s+", " ", value).strip(" .,:;!?|/-")
+    if not value or len(value) < 2:
+        return ""
+    return value[:60].rstrip(" .,:;!?|/-")
+
+
+def _cms_tag_list(values) -> list[str]:
+    """Deduplicate user-reviewed or rule-derived tag phrases, preserving order."""
+    if isinstance(values, str):
+        values = re.split(r"[,\n]", values)
+    if not isinstance(values, (list, tuple)):
+        return []
+    out, seen = [], set()
+    for value in values:
+        tag = _cms_tag(value)
+        key = tag.casefold()
+        if tag and key not in seen:
+            seen.add(key)
+            out.append(tag)
+    return out[:3]
+
+
+def _cms_frontmatter_tags(markdown: str) -> list[str]:
+    """Prefer the three editorial keywords when a draft already declares them."""
+    match = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", markdown, re.S)
+    if not match:
+        return []
+    for line in match.group(1).splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower().replace("-", "_") in {
+            "keywords", "target_keywords", "target_keyphrases", "tags"
+        }:
+            return _cms_tag_list(value.strip().strip("[]").replace("\"", "").replace("'", ""))
+    return []
+
+
+def _cms_primary_tag(title: str) -> str:
+    """Use the query portion of a title, never the entire SEO title as one tag."""
+    value = _cms_tag(title)
+    # Most titles follow "Primary query: explanatory subtitle". The primary
+    # query is what belongs in a tag, not the subtitle or the publication year.
+    value = re.split(r"\s*[:—–]\s*", value, maxsplit=1)[0]
+    value = re.sub(r"\b20\d{2}\b", "", value, flags=re.I)
+    value = re.sub(r"\s+", " ", value).strip(" .,:;!?|/-")
+    return _cms_tag(value)
+
+
+def _cms_tags(title: str, markdown: str, additional: str = "") -> list[str]:
+    """Create exactly three short, phrase-level candidates for review."""
+    tags = _cms_frontmatter_tags(markdown)
+    primary = _cms_primary_tag(title)
+    if primary:
+        tags.insert(0, primary)
+    tags.extend(t.strip() for t in str(additional or "").split(",") if t.strip())
+
+    source = f"{title}\n{markdown}"
+    lower = source.casefold()
+    # These are category phrases, not claims about a provider. They make a
+    # useful fallback for drafts that do not include editorial frontmatter.
+    if re.search(r"\b(?:ai|llm|unified|multi[ -]model|openai[ -]compatible)\b", lower) and "api" in lower:
+        tags.append("AI API gateway")
+    if re.search(r"\bmulti[ -]model\b|\bmultiple (?:ai |language )?models\b|\bmodel variety\b", lower):
+        tags.append("Multi-model API")
+    if re.search(r"\bopenai[ -]compatible\b", lower):
+        tags.append("OpenAI-compatible API")
+    if re.search(r"\balternatives?\b|\bcompare|\bcomparison\b|\bversus\b|\bvs\.?\b", lower):
+        tags.append("API provider comparison")
+    if re.search(r"\bdeveloper|\bintegration|\bsdk\b", lower):
+        tags.append("API integration")
+
+    # Stable broad fallbacks preserve the CMS requirement for at least three
+    # tags. The review dialog always exposes them for replacement.
+    for fallback in ("AI API", "Developer tools"):
+        if len(_cms_tag_list(tags)) >= 3:
             break
-        out.append(c)
-        used += w
-    return "".join(out)
+        tags.append(fallback)
+    return _cms_tag_list(tags)
 
 
-def _pub_x(cfg, text, title, fname):
-    link = (cfg.get("link_url") or "").strip() \
-        or _latest_public_url(cfg.get("_records") or [], fname)
-    # 摘要：正文第一段非标题文本
-    para = next((ln.strip() for ln in text.splitlines()
-                 if ln.strip() and not ln.startswith("#")), "")
-    # 预算 280 加权单位：链接固定折算 23 + 换行，再留 2 个单位余量防边界
-    budget = 280 - (25 if link else 0) - 2
-    tweet = _x_trim(title, budget)
-    room = budget - _x_len(tweet) - 2   # 减去两个换行
-    if para and room > 40:
-        tweet += "\n\n" + _x_trim(para, room)
-    if link:
-        tweet += "\n" + link
-    hdr = _oauth1_header("POST", "https://api.x.com/2/tweets",
-                         os.environ["X_API_KEY"], os.environ["X_API_SECRET"],
-                         os.environ["X_ACCESS_TOKEN"], os.environ["X_ACCESS_SECRET"])
-    r = requests.post("https://api.x.com/2/tweets", json={"text": tweet},
-                      headers={"Authorization": hdr, "Content-Type": "application/json"},
-                      timeout=30)
-    if r.status_code == 201:
-        tid = (r.json().get("data") or {}).get("id", "")
-        return {"ok": True, "url": f"https://x.com/i/web/status/{tid}" if tid else "",
-                "note": "" if link else "未带回链（该文件还没有长文渠道的公开 URL）"}
-    return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+def _cms_error(exc_or_response, token: str = "") -> str:
+    if isinstance(exc_or_response, Exception):
+        msg = f"{type(exc_or_response).__name__}: {exc_or_response}"
+    else:
+        try:
+            payload = exc_or_response.json() or {}
+        except (ValueError, TypeError):
+            payload = {}
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        if isinstance(errors, list) and errors:
+            parts = []
+            for item in errors[:3]:
+                if not isinstance(item, dict):
+                    continue
+                ext = item.get("extensions") if isinstance(item.get("extensions"), dict) else {}
+                field, code = ext.get("field"), ext.get("code")
+                detail = str(item.get("message") or "validation failed")
+                # Directus may echo the complete article value in a validation message.
+                # Do not return that content to a toast or publish history.
+                if detail.lstrip().startswith("Value "):
+                    detail = "value rejected by field validation"
+                prefix = " · ".join(x for x in (str(field or "").strip(), str(code or "").strip()) if x)
+                parts.append(f"{prefix}: {detail}" if prefix else detail)
+            if parts:
+                msg = f"HTTP {exc_or_response.status_code}: " + " | ".join(parts)
+            else:
+                msg = f"HTTP {exc_or_response.status_code}: CMS validation failed"
+        else:
+            msg = f"HTTP {exc_or_response.status_code}: {exc_or_response.text[:200]}"
+    if token:
+        msg = msg.replace(token, "[redacted]")
+    return msg.replace("Authorization", "authorization")
 
 
-# ---------------------------------------------------------------- Reddit (script app)
+def _cms_preview(cfg: dict, text: str, title: str, fname: str) -> dict:
+    cms_markdown = _cms_markdown(text)
+    return {
+        "title": title,
+        "summary": _cms_summary(text, title),
+        "slug": _cms_slug(title, fname),
+        "tags": _cms_tags(title, cms_markdown, cfg.get("additional_tags", "")),
+        "format": "markdown",
+        "characters": len(cms_markdown),
+        "status": str(cfg.get("draft_value") or "draft").strip() or "draft",
+        "platform": str(cfg.get("platform_value") or "wisdom-gate").strip() or "wisdom-gate",
+        "model": str(cfg.get("model_value") or "").strip(),
+        "filename": fname,
+    }
 
-def _pub_reddit(cfg, text, title, fname):
-    sub = (cfg.get("subreddit") or "").strip().removeprefix("r/")
-    if not sub:
-        return {"ok": False, "error": "先在设置里配置 subreddit"}
-    ua = "geolook-publisher/0.1 by " + os.environ["REDDIT_USERNAME"]
-    tok = requests.post(
-        "https://www.reddit.com/api/v1/access_token",
-        auth=(os.environ["REDDIT_CLIENT_ID"], os.environ["REDDIT_CLIENT_SECRET"]),
-        data={"grant_type": "password", "username": os.environ["REDDIT_USERNAME"],
-              "password": os.environ["REDDIT_PASSWORD"]},
-        headers={"User-Agent": ua}, timeout=30)
-    if tok.status_code != 200 or "access_token" not in (tok.json() or {}):
-        return {"ok": False, "error": f"取 token 失败 HTTP {tok.status_code}: {tok.text[:150]}"}
-    r = requests.post(
-        "https://oauth.reddit.com/api/submit",
-        data={"sr": sub, "kind": "self", "title": title, "text": text,
-              "api_type": "json"},
-        headers={"Authorization": "bearer " + tok.json()["access_token"], "User-Agent": ua},
-        timeout=30)
-    j = (r.json() or {}).get("json", {}) if r.status_code == 200 else {}
-    if r.status_code == 200 and not j.get("errors"):
-        return {"ok": True, "url": (j.get("data") or {}).get("url", "")}
-    err = "; ".join("/".join(map(str, e)) for e in j.get("errors", [])) or f"HTTP {r.status_code}"
-    return {"ok": False, "error": err[:200]}
+
+def _pub_wisgate_cms(cfg, text, title, fname, options=None):
+    """Create a draft through a Directus-compatible items endpoint.
+
+    The CMS schema is configurable because the admin URL alone does not prove
+    the collection's field names. This function never sends a publish status.
+    """
+    base = (cfg.get("api_base_url") or "https://cms.wisgate.ai").strip().rstrip("/")
+    if not re.fullmatch(r"https://[^/]+", base):
+        return {"ok": False, "error": "api_base_url 必须是 https:// 主机地址，不能填写 /admin 路径"}
+    collection = str(cfg.get("collection") or "blogs").strip().strip("/")
+    if not _IDENT.fullmatch(collection):
+        return {"ok": False, "error": "collection 必须是简单字段名，例如 blogs"}
+    try:
+        title_field = _cms_ident(cfg.get("title_field"), "title_field", "title")
+        body_field = _cms_ident(cfg.get("body_field"), "body_field", "content")
+        slug_field = _cms_ident(cfg.get("slug_field"), "slug_field", "slug")
+        status_field = _cms_ident(cfg.get("status_field"), "status_field", "status")
+        cover_image_field = _cms_ident(cfg.get("cover_image_field"), "cover_image_field", "cover_image")
+        summary_field = _cms_ident(cfg.get("summary_field"), "summary_field", "summary")
+        publish_time_field = _cms_ident(cfg.get("publish_time_field"), "publish_time_field", "publish_time")
+        tags_field = _cms_ident(cfg.get("tags_field"), "tags_field", "tags")
+        platform_field = _cms_ident(cfg.get("platform_field"), "platform_field", "platform")
+        model_field = _cms_ident(cfg.get("model_field"), "model_field", "model")
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    # `content` uses Directus's Markdown rich-text interface. Older GeoLook
+    # configurations exposed an HTML option, which made raw tags visible in CMS.
+    # Keep that value backward-compatible, but always submit Markdown here.
+    fmt = "markdown"
+    tags_format = str(cfg.get("tags_format") or "json").strip().lower()
+    if tags_format not in {"json", "csv"}:
+        return {"ok": False, "error": "tags_format 只能是 json 或 csv"}
+    token = os.environ["WISGATE_CMS_TOKEN"]
+    options = options if isinstance(options, dict) else {}
+    cms_markdown = _cms_markdown(text)
+    slug_value = _cms_slug(title, fname)
+    if "tags" in options:
+        tags = _cms_tag_list(options.get("tags"))
+        if len(tags) != 3:
+            return {"ok": False, "error": "请确认恰好 3 个关键词标签"}
+    else:
+        tags = _cms_tags(title, cms_markdown, cfg.get("additional_tags", ""))
+    body = {
+        title_field: title,
+        body_field: cms_markdown,
+        slug_field: slug_value,
+        status_field: str(cfg.get("draft_value") or "draft").strip() or "draft",
+        summary_field: _cms_summary(text, title),
+        publish_time_field: G.now_iso(),
+        tags_field: tags if tags_format == "json" else ", ".join(tags),
+        platform_field: str(cfg.get("platform_value") or "wisdom-gate").strip() or "wisdom-gate",
+    }
+    # WisGate CMS requires this canonical field even when a custom mapping is used.
+    body["slug"] = slug_value
+    cover_image = str(cfg.get("cover_image_value") or "").strip()
+    if cover_image:
+        body[cover_image_field] = cover_image
+    # Omit an empty model value so Directus leaves the nullable field blank.
+    if str(cfg.get("model_value") or "").strip():
+        body[model_field] = str(cfg["model_value"]).strip()
+    url = f"{base}/items/{collection}"
+    try:
+        r = requests.post(url, headers={"Authorization": f"Bearer {token}",
+                                        "Accept": "application/json",
+                                        "Content-Type": "application/json"},
+                          json=body, timeout=30)
+    except requests.RequestException as exc:
+        return {"ok": False, "error": _cms_error(exc, token)}
+    if r.status_code not in (200, 201):
+        error = _cms_error(r, token)
+        if body_field == "content":
+            error += f"（本次提交 {len(body[body_field])} 个字符，格式：{fmt}）"
+        return {"ok": False, "error": error}
+    try:
+        payload = r.json() or {}
+    except ValueError:
+        payload = {}
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    item_id = data.get("id") if isinstance(data, dict) else None
+    admin_url = f"{base}/admin/content/{collection}"
+    if item_id is not None:
+        admin_url += f"/{item_id}"
+    return {"ok": True, "url": admin_url,
+            "note": "已导入为 CMS 草稿，请在后台核对后再发布"}
 
 
 _IMPL = {"github": _pub_github, "wordpress": _pub_wordpress,
          "wechat_draft": _pub_wechat, "webhook": _pub_webhook,
-         "x": _pub_x, "reddit": _pub_reddit}
+         "wisgate_cms": _pub_wisgate_cms}
 
 
 # ---------------------------------------------------------------- 入口与记录
@@ -326,7 +488,30 @@ def records(slug: str) -> list[dict]:
     return G.read_json(G.project_dir(slug) / "publish.json", []) or []
 
 
-def publish(slug: str, code: str, rel: str, title: str = "") -> dict:
+def preview(slug: str, code: str, rel: str, title: str = "") -> dict:
+    """Build a no-side-effect review payload for a publishing channel."""
+    if code not in PUBLISHERS:
+        return {"ok": False, "error": f"未知渠道 {code}"}
+    try:
+        text, fname = _read_source(slug, rel)
+    except (ValueError, FileNotFoundError):
+        return {"ok": False, "error": f"文件不可用：{rel}"}
+    title = title or _title_of(text, fname)
+    if code == "wisgate_cms":
+        data = _cms_preview(_cfg(slug, code), text, title, fname)
+        # Re-run lint for the exact final being published. The aggregate draft
+        # report can include unrelated files and may be stale after edits.
+        try:
+            import generate
+            path = (G.project_dir(slug) / rel).resolve()
+            data["issues"] = generate.lint_draft(slug, path)
+        except Exception:  # noqa: BLE001 - a preview must remain available
+            data["issues"] = []
+        return {"ok": True, **data}
+    return {"ok": False, "error": "该渠道暂不支持发布前预览"}
+
+
+def publish(slug: str, code: str, rel: str, title: str = "", options=None) -> dict:
     if code not in PUBLISHERS:
         return {"ok": False, "error": f"未知渠道 {code}"}
     miss = missing_env(code)
@@ -337,11 +522,10 @@ def publish(slug: str, code: str, rel: str, title: str = "") -> dict:
     except (ValueError, FileNotFoundError):
         return {"ok": False, "error": f"文件不可用：{rel}"}
     title = title or _title_of(text, fname)
-    # 发布记录随 cfg 传入（不用模块级全局：看板是多线程服务，
-    # 并发发布不同项目时全局会互相污染回链归属）
-    cfg = dict(_cfg(slug, code))
-    cfg["_records"] = records(slug)
-    res = _IMPL[code](cfg, text, title, fname)
+    if code == "wisgate_cms":
+        res = _IMPL[code](_cfg(slug, code), text, title, fname, options)
+    else:
+        res = _IMPL[code](_cfg(slug, code), text, title, fname)
     entry = {"at": G.now_iso(), "platform": code, "platform_name": PUBLISHERS[code]["name"],
              "path": rel, "title": title, "ok": res.get("ok", False),
              "url": res.get("url", ""), "note": res.get("note", ""),

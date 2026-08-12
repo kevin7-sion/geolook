@@ -36,7 +36,12 @@ RE_HOWTO = re.compile(r"(第[一二三四五六七八九十\d]+步|步骤\s*[一
 RE_HOWTO_SOFT = re.compile(r"(如何|怎么)")
 # 登录/注册/购物车/联系页等功能页天然低内容，不按 SPA 空壳 P0 误报
 FUNC_PAGE = re.compile(r"/(login|signin|signup|register|cart|checkout|account|auth|contact)(/|$)", re.I)
-RE_FAQ = re.compile(r"(常见问题|常见疑问|问答|よくある質問|\bFAQ\b|^\s*[问Q][:：]|答[:：])", re.I | re.M)
+RE_FAQ = re.compile(
+    r"(常见问题|常见疑问|常见问答|问答|よくある質問|\bFAQ\b"
+    r"|\bfrequently\s+asked\s+questions?\b|\bcommon\s+questions?\b"
+    r"|\bquestions?\s*(?:and|&)\s*answers?\b|\bq\s*(?:&|and)\s*a\b"
+    r"|^\s*[问Q][:：]|答[:：])", re.I | re.M
+)
 RE_DATE = re.compile(r"(20\d{2}[-/年]\s?\d{1,2}[-/月]\s?\d{1,2}|更新[于时间]*[:：]?\s*20\d{2}|最后更新|发布于|\bupdated\b|\bpublished\b)", re.I)
 RE_AUTHOR = re.compile(r"(作者|撰文|编辑[:：]|著者|執筆|\bauthor\b|\bby\s+[A-Z][a-z]+)", re.I)
 
@@ -45,20 +50,6 @@ AUTHORITY_SCHEMA = {
     "FAQPage", "Article", "TechArticle", "NewsArticle", "BlogPosting",
     "HowTo", "BreadcrumbList", "WebSite", "Review", "AggregateRating", "Offer",
 }
-
-
-def _canon_url_key(u: str) -> str:
-    p = urlparse(u.strip())
-    host = p.netloc.lower().removeprefix("www.")
-    path = (p.path or "/").rstrip("/") or "/"
-    return f"{host}{path}"
-
-
-def _canon_mismatch(canonical: str, actual: str) -> bool:
-    """canonical 指向「别的页面」才算问题；协议 / www / 末尾斜杠差异都不算。"""
-    if not canonical.startswith("http"):
-        return False  # 相对 canonical，不猜
-    return _canon_url_key(canonical) != _canon_url_key(actual)
 
 
 def band(value: float, stops: list[tuple[float, float]]) -> float:
@@ -76,29 +67,6 @@ def jsonld_has_key(obj, keys: set[str]) -> bool:
     if isinstance(obj, list):
         return any(jsonld_has_key(x, keys) for x in obj)
     return False
-
-
-def split_sections(text: str, h2s: list[str]) -> list[str]:
-    """按 H2 标题行把扁平正文切成段落组。检索的最小单元是段落而不是页面——
-    一段能独立回答问题的文字可以赢过竞品的整页（GEO Readiness Manual 第 0 章）。"""
-    heads = {h.strip() for h in h2s if h and h.strip()}
-    if not heads:
-        return []
-    lines = text.splitlines()
-    idx = [i for i, ln in enumerate(lines) if ln.strip() in heads]
-    if not idx:
-        return []
-    bounds = idx + [len(lines)]
-    return ["\n".join(lines[a + 1:b]).strip() for a, b in zip(bounds, bounds[1:])]
-
-
-def quotable(seg: str) -> bool:
-    """一段是否「可被独立引用」：有足够词量承载语义，且含至少一种硬信息
-    （数字/定义/步骤）。纯观点段、导航段、口号段都不算。"""
-    import geolib as _G
-    if _G.word_count(seg) < 60:
-        return False
-    return bool(RE_NUMBER.search(seg) or RE_DEFINITION.search(seg) or RE_HOWTO.search(seg))
 
 
 def score_page(page: dict, keywords: list[str]) -> dict:
@@ -128,20 +96,12 @@ def score_page(page: dict, keywords: list[str]) -> dict:
         issue("NON_200_STATUS", "P1 页面返回非 200（如 202/3xx），部分抓取器会直接放弃")
     else:
         issue("PAGE_UNREACHABLE", "P0 页面不可访问，AI 抓取器同样拿不到")
-    meta_noindex = "noindex" in (page.get("meta_robots") or "").lower()
-    header_noindex = "noindex" in (page.get("x_robots_tag") or "").lower()
-    if not (meta_noindex or header_noindex):
+    if "noindex" not in (page.get("meta_robots") or "").lower():
         s += 3
-    elif header_noindex:
-        # HTTP 头级 noindex 在页面源码里看不到，比 meta 更容易带病上线
-        issue("XROBOTS_NOINDEX", "P0 X-Robots-Tag 响应头含 noindex（页面源码里看不到，通常是 CDN/中间件配置），等于主动退出候选池")
     else:
         issue("NOINDEX", "P0 meta robots 含 noindex，等于主动退出候选池")
-    canon = page.get("canonical") or ""
-    if canon:
+    if page.get("canonical"):
         s += 2
-        if _canon_mismatch(canon, page.get("final_url") or page.get("url") or ""):
-            issue("CANONICAL_MISMATCH", "P1 canonical 指向别的 URL，抓取器会把权重记到别处；确认这是刻意的合并而不是配置错误")
     else:
         issue("NO_CANONICAL", "P2 缺 canonical，重复内容会稀释信号")
     if wc >= 120:
@@ -190,14 +150,6 @@ def score_page(page: dict, keywords: list[str]) -> dict:
         if not ok:
             issue(block_codes[k], f"P1 缺「{k}」块，补上可显著提升被吸收概率")
 
-    # 4b. 段落级可引：检索按段落选材，页面长 ≠ 有可引之材
-    segs = split_sections(text, h2)
-    q_n = sum(1 for sg in segs if quotable(sg))
-    if len(segs) >= 3 and wc >= 300 and q_n == 0:
-        issue("NO_QUOTABLE_PASSAGE",
-              "P1 整页没有一个可独立引用的段落——每段要么太短、要么没有数字/定义/步骤等硬信息；"
-              "检索是按段落选材的，先把 2–3 个核心段落改成自包含的证据段")
-
     # 5. 权威信号 15
     s = 0.0
     if RE_DATE.search(text) or jsonld_has_key(page.get("jsonld_raw"), {"dateModified", "datePublished"}):
@@ -214,15 +166,6 @@ def score_page(page: dict, keywords: list[str]) -> dict:
     s += 5 * band(len(hit_schema), [(3, 1.0), (2, 0.75), (1, 0.45)])
     if not hit_schema:
         issue("NO_JSONLD", "P0 没有任何结构化数据（JSON-LD），机器读不懂这页在讲什么实体")
-    # schema 与可见内容一致性：声明了 FAQPage 但正文没有可见问答 = 自我声明，
-    # 检索系统会拿可见文本对账，对不上时结构化数据反而变成负信号
-    if "FAQPage" in types and not RE_FAQ.search(text):
-        issue("SCHEMA_CONTENT_MISMATCH", "P1 JSON-LD 声明了 FAQPage 但页面正文没有可见的问答内容，schema 必须与可见内容一致")
-    # 作者实体关联：文章型页面的 schema 不挂 author，引擎无法把作者与出版方连起来，
-    # 内容会被视为无主之作（GEO Readiness Manual：cannot connect the author to the publication）
-    if types & {"Article", "TechArticle", "NewsArticle", "BlogPosting"} \
-            and not jsonld_has_key(page.get("jsonld_raw"), {"author"}):
-        issue("NO_AUTHOR_ENTITY", "P2 文章型 JSON-LD 没有 author 字段，作者与出版方连不起来，权威信号打折")
     d["权威信号"] = s
 
     # 6. 对题性 10（title / h1 / h2 是否覆盖目标问题里的词）
@@ -241,7 +184,6 @@ def score_page(page: dict, keywords: list[str]) -> dict:
         "score": total,
         "grade": "A" if total >= 80 else "B" if total >= 65 else "C" if total >= 45 else "D",
         "dimensions": {k: round(v, 1) for k, v in d.items()},
-        "sections_total": len(segs), "sections_quotable": q_n,
         "blocks": has,
         "jsonld_types": sorted(types),
         "issues": issues,
@@ -271,15 +213,6 @@ def run(slug: str) -> dict:
     cfg = G.load_config(slug)
     pdir = G.project_dir(slug)
     pages = G.read_jsonl(pdir / "evidence" / "pages.jsonl")
-    if not pages and not G.has_site(cfg):
-        G.info("无自有网站项目：跳过站点体检（技术层不适用；内容与阵地诊断照常）")
-        out = {"slug": slug, "audited_at": G.now_iso(), "market": cfg.get("market", "cn"),
-               "no_site": True, "site": {}, "site_issues": [], "layers": [],
-               "page_count": 0, "avg_score": None, "grade_distribution": {},
-               "block_gap": [], "pages": [], "keywords_used": [],
-               "language_coverage": {}}
-        G.write_json(pdir / "audit.json", out)
-        return out
     if not pages:
         G.die("没有抓取结果，先运行：python3 scripts/geo.py crawl --slug " + slug)
     site = G.read_json(pdir / "evidence" / "site.json", {})
@@ -306,90 +239,24 @@ def run(slug: str) -> dict:
     en_pages = lang_dist.get("en", 0)
     zh_pages = lang_dist.get("zh", 0)
     ja_pages = lang_dist.get("ja", 0)
-    content_pages = sum(lang_dist.values())
-    hreflang_pages = sum(1 for p in pages
-                         if p.get("word_count", 0) >= 120 and p.get("hreflang_count", 0) > 0)
-    # 多语言站才要求 hreflang：单语言站声明它没有意义
-    multilingual = sum(1 for v in (zh_pages, en_pages, ja_pages) if v > 0) >= 2
 
     # 站点级问题
     site_issues = []
-    lang_fail = lang_warn = False
     if market in ("global", "both") and en_pages == 0:
-        lang_fail = True
         site_issues.append(
             "P0 抓到的页面里没有一页是英文原生内容，海外 AI 引用的可识别语言中英文占 82.90%–95.07%，"
             "翻译腔或中文页几乎进不了候选池")
     if market in ("cn", "both") and zh_pages == 0:
-        lang_fail = True
         site_issues.append("P0 抓到的页面里没有中文内容，国内平台无从引用")
     if market == "both" and en_pages and zh_pages and abs(en_pages - zh_pages) > max(en_pages, zh_pages) * 0.7:
         thin = "英文" if en_pages < zh_pages else "中文"
-        lang_warn = True
         site_issues.append(f"P1 中英内容严重不对等（中文 {zh_pages} 页 / 英文 {en_pages} 页），{thin}侧是明显短板")
     if site.get("ai_bots_blocked"):
         site_issues.append("P0 robots.txt 封禁了 " + "、".join(site["ai_bots_blocked"]) + "，这些引擎永远抓不到你")
-    if site.get("ai_ua_blocked"):
-        site_issues.append(
-            "P0 WAF/CDN 差异封锁：普通浏览器能打开，但换 " + "、".join(site["ai_ua_blocked"])
-            + " 的 UA 抓首页被拒（robots 明明放行）。在引擎侧等于不存在，且站长自己看不出来——"
-            "到 CDN/防火墙里给这些 UA 加白名单")
-    for p in site.get("ai_bots_partial", []) or []:
-        site_issues.append(
-            f"P1 robots.txt 对 {p['bot']} 封了部分内容路径（{p['count']}/{p['sampled']} 抽样页命中 "
-            f"{p.get('rule') or ''}，如 {p['paths'][0]}），确认封的是低价值页而不是内容页")
     if not site.get("has_sitemap"):
         site_issues.append("P0 没有 sitemap.xml，收录效率和覆盖面都会打折")
-    elif site.get("robots_sitemap_declared") is False:
-        site_issues.append("P2 robots.txt 没有声明 Sitemap: 行，AI 抓取器发现新页面会更慢")
     if not site.get("has_llms_txt"):
         site_issues.append("P2 没有 /llms.txt，可以低成本给 AI 一份官方事实索引")
-    # 重复检测：同题多 URL 会让检索在错误的候选里二选一，「错的那个」可能赢
-    #（GEO Readiness Manual：duplicate URL increases the chance the wrong thing survives）
-    import hashlib
-    by_title: dict[str, list[str]] = {}
-    by_body: dict[str, list[str]] = {}
-    for p in pages:
-        if (p.get("status") or 0) != 200 or p.get("word_count", 0) < 120:
-            continue
-        t = (p.get("title") or "").strip()
-        if t:
-            by_title.setdefault(t, []).append(p["url"])
-        body_key = hashlib.md5(
-            re.sub(r"\s+", "", (p.get("text") or "")[:600]).encode()).hexdigest()
-        by_body.setdefault(body_key, []).append(p["url"])
-    # 多语言站的不同语言版本标题几乎必不同，正文前段也不同，误报风险低
-    dup_titles = [(t, us) for t, us in by_title.items() if len(us) > 1]
-    dup_bodies = [us for us in by_body.values() if len(us) > 1]
-    if dup_titles:
-        ex = dup_titles[0]
-        site_issues.append(
-            f"P1 {len(dup_titles)} 组页面标题完全相同（如「{ex[0][:40]}」× {len(ex[1])} 个 URL），"
-            "同题多 URL 会让检索在错误候选里二选一——合并或用 canonical 指向唯一版本")
-    if dup_bodies:
-        site_issues.append(
-            f"P1 {len(dup_bodies)} 组页面正文开头完全一致（近重复内容），例：{dup_bodies[0][0]}"
-            f" 与 {dup_bodies[0][1]}——保留一个规范版本，其余 301 或 canonical")
-
-    if multilingual and content_pages and hreflang_pages / content_pages < 0.3:
-        site_issues.append(
-            f"P1 多语言站但只有 {hreflang_pages}/{content_pages} 个内容页声明 hreflang，"
-            "引擎会把各语言版本当重复内容或串错语言，跨市场检索时挂错页面")
-    if site.get("sitemap_noisy_urls"):
-        site_issues.append(
-            f"P2 sitemap 里有 {site['sitemap_noisy_urls']} 条带参数/搜索/翻页 URL"
-            f"（如 {site.get('sitemap_noisy_example')}），低价值页会稀释实体表征——"
-            "从 sitemap 移出，并用 robots 通配符（如 `Disallow: /*?session=`、`Disallow: /search?`）挡掉")
-    lch = site.get("llms_txt_check") or {}
-    if lch.get("broken"):
-        site_issues.append(
-            f"P1 llms.txt 里 {len(lch['broken'])}/{lch['checked']} 条抽样链接打不开"
-            f"（如 {lch['broken'][0]['url']} → {lch['broken'][0]['status']}）。"
-            "llms.txt 只有指向可抓取的有效页面才有意义")
-    if lch.get("robots_blocked"):
-        site_issues.append(
-            f"P1 llms.txt 指向的页面反而被 robots 封禁 AI 爬虫（{lch['robots_blocked'][0]['url']}），"
-            "一边给索引一边拦抓取，互相矛盾")
     grade_dist = {g: sum(1 for r in results if r["grade"] == g) for g in "ABCD"}
 
     # 全站最常见的缺口 → 直接就是 P0 内容工程清单
@@ -399,76 +266,6 @@ def run(slug: str) -> dict:
             gap.setdefault(k, 0)
             gap[k] += 0 if v else 1
     block_gap = sorted(gap.items(), key=lambda x: -x[1])
-    block_gap_dicts = [{"block": k, "missing_pages": v, "total": len(results)} for k, v in block_gap]
-
-    # —— 四层模型：访问 → 定向 → 理解 → 可引用 ——
-    # 每层依赖上一层：访问失败时下游的一切优化在引擎侧不可见，修复顺序必须从上游开始。
-    n = len(results) or 1
-    lch = site.get("llms_txt_check") or {}
-
-    def pages_with(code: str) -> int:
-        return sum(1 for r in results if code in (r.get("issue_codes") or []))
-
-    def layer(key, name, question, entries):
-        entries = [e for e in entries if e]
-        status = ("fail" if any(s == "fail" for s, _ in entries)
-                  else "warn" if entries else "ok")
-        return {"key": key, "name": name, "question": question, "status": status,
-                "issues": [t for _, t in entries]}
-
-    spa, unreach = pages_with("SPA_SHELL"), pages_with("PAGE_UNREACHABLE")
-    noidx = pages_with("NOINDEX") + pages_with("XROBOTS_NOINDEX")
-    nojld = pages_with("NO_JSONLD")
-    layers = [
-        layer("access", "访问", "抓取器能拿到内容吗", [
-            ("fail", "robots.txt 整站封禁 " + "、".join(site["ai_bots_blocked"]))
-            if site.get("ai_bots_blocked") else None,
-            ("fail", "WAF/CDN 对 " + "、".join(site["ai_ua_blocked"]) + " 的 UA 拒绝访问（robots 明明放行）")
-            if site.get("ai_ua_blocked") else None,
-            ("warn", f"robots 封了部分内容路径（{len(site['ai_bots_partial'])} 个爬虫受影响）")
-            if site.get("ai_bots_partial") else None,
-            (("fail" if spa >= n * 0.3 else "warn"), f"{spa} 页疑似前端渲染空壳，抓取器读不到正文") if spa else None,
-            (("fail" if noidx >= n * 0.3 else "warn"), f"{noidx} 页带 noindex（meta 或 X-Robots-Tag）") if noidx else None,
-            ("warn", f"{unreach} 页抓取失败") if unreach else None,
-        ]),
-        layer("orient", "定向", "抓取器找得到、认得清每个 URL 吗", [
-            ("fail", "没有 sitemap.xml") if not site.get("has_sitemap") else None,
-            ("warn", "robots.txt 未声明 Sitemap: 行")
-            if site.get("has_sitemap") and site.get("robots_sitemap_declared") is False else None,
-            ("warn", "没有 /llms.txt") if not site.get("has_llms_txt") else None,
-            ("warn", f"llms.txt 有 {len(lch['broken'])} 条失效链接") if lch.get("broken") else None,
-            ("warn", "llms.txt 指向的页面被 robots 封禁") if lch.get("robots_blocked") else None,
-            ("warn", f"{pages_with('NO_CANONICAL')} 页缺 canonical") if pages_with("NO_CANONICAL") else None,
-            ("warn", f"{pages_with('CANONICAL_MISMATCH')} 页 canonical 指向别处")
-            if pages_with("CANONICAL_MISMATCH") else None,
-            ("warn", f"多语言站 hreflang 覆盖仅 {hreflang_pages}/{content_pages} 页")
-            if multilingual and content_pages and hreflang_pages / content_pages < 0.3 else None,
-            ("warn", f"sitemap 含 {site['sitemap_noisy_urls']} 条低价值 URL（索引污染）")
-            if site.get("sitemap_noisy_urls") else None,
-            ("warn", f"{len(dup_titles)} 组标题重复的页面") if dup_titles else None,
-            ("warn", f"{len(dup_bodies)} 组近重复正文的页面") if dup_bodies else None,
-        ]),
-        layer("understand", "理解", "机器读得懂这是什么实体吗", [
-            (("fail" if nojld >= n * 0.5 else "warn"), f"{nojld} 页没有任何 JSON-LD") if nojld else None,
-            ("warn", f"{pages_with('SCHEMA_CONTENT_MISMATCH')} 页 schema 与可见内容不一致")
-            if pages_with("SCHEMA_CONTENT_MISMATCH") else None,
-            ("fail", "目标市场缺原生语言内容") if lang_fail
-            else ("warn", "中英内容严重不对等") if lang_warn else None,
-        ]),
-        layer("quote", "可引用", "有值得引用的具体内容吗", [
-            (("fail" if avg < 45 else "warn"), f"页面均分 {avg}（70 以下属「需要改造」）") if avg < 70 else None,
-            ("warn", f"{pages_with('NO_QUOTABLE_PASSAGE')} 页整页没有可独立引用的段落")
-            if pages_with("NO_QUOTABLE_PASSAGE") else None,
-            *[("warn", f"「{g['block']}」块缺失 {g['missing_pages']}/{g['total']} 页")
-              for g in block_gap_dicts if g["missing_pages"] >= g["total"] * 0.5][:3],
-        ]),
-    ]
-    first_fail = None
-    for l in layers:
-        if first_fail:
-            l["blocked_by"] = first_fail
-        if l["status"] == "fail" and not first_fail:
-            first_fail = l["name"]
 
     out = {
         "slug": slug,
@@ -476,16 +273,13 @@ def run(slug: str) -> dict:
         "market": market,
         "site": site,
         "language_coverage": {"distribution": lang_dist, "zh_pages": zh_pages,
-                              "en_pages": en_pages, "ja_pages": ja_pages,
-                              "content_pages": content_pages, "hreflang_pages": hreflang_pages,
-                              "multilingual": multilingual},
+                              "en_pages": en_pages, "ja_pages": ja_pages},
         "site_issues": site_issues,
-        "layers": layers,
         "keywords_used": kws,
         "page_count": len(results),
         "avg_score": avg,
         "grade_distribution": grade_dist,
-        "block_gap": block_gap_dicts,
+        "block_gap": [{"block": k, "missing_pages": v, "total": len(results)} for k, v in block_gap],
         "pages": sorted(results, key=lambda r: r["score"]),
     }
     G.write_json(pdir / "audit.json", out)

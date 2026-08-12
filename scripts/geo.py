@@ -29,28 +29,19 @@ except ModuleNotFoundError as e:
 
 
 DEFAULT_PLATFORMS = {
-    "cn": ["glm", "doubao", "deepseek", "kimi", "minimax", "nano_ai", "baidu"],
-    "global": ["gemini", "openai", "claude", "grok", "perplexity", "chatgpt", "google_aio"],
+    "cn": ["glm", "doubao", "deepseek", "kimi", "minimax", "custom", "nano_ai", "baidu"],
+    "global": ["gemini", "openai", "claude", "grok", "perplexity", "custom", "chatgpt"],
     "both": ["glm", "doubao", "deepseek", "kimi", "minimax", "nano_ai", "baidu",
-             "gemini", "openai", "claude", "grok", "perplexity", "chatgpt", "google_aio"],
+             "gemini", "openai", "claude", "grok", "perplexity", "custom", "chatgpt"],
 }
 
 
 def cmd_init(a):
-    # 无站点模式：电商商品、线下品牌、小程序等没有自有官网的对象同样能做 GEO。
-    # 抓取/体检/站内资产不适用，采样、竞品、阵地、内容、验收全部照常。
-    no_site = getattr(a, "no_site", False) or not (a.url or "").strip()
-    if no_site:
-        if not a.name:
-            G.die("无站点项目必须用 --name 指定品牌/商品名（没有官网可供推断）")
-        url, host = "", ""
-        slug = a.slug or G.slugify(a.name)
-    else:
-        url = a.url.rstrip("/")
-        if not url.startswith("http"):
-            url = "https://" + url
-        host = urlparse(url).netloc.removeprefix("www.")
-        slug = a.slug or G.slugify(host.split(".")[0])
+    url = a.url.rstrip("/")
+    if not url.startswith("http"):
+        url = "https://" + url
+    host = urlparse(url).netloc.removeprefix("www.")
+    slug = a.slug or G.slugify(host.split(".")[0])
 
     # 已存在的项目绝不覆盖：geo.json 里有问题库、竞品、事实口径，
     # 覆盖等于把一期的人工投入清零。要重建必须显式加 --force。
@@ -62,7 +53,7 @@ def cmd_init(a):
               f"或确认要清空后加 --force")
 
     name = a.name
-    if not name and url:
+    if not name:
         res = G.fetch(url)
         if res["html"]:
             soup = G.parse_html(res["html"])
@@ -95,31 +86,8 @@ def cmd_init(a):
     G.save_config(slug, cfg)
     for sub in ("evidence", "samples", "metrics", "reports", "history", "content"):
         (G.project_dir(slug) / sub).mkdir(parents=True, exist_ok=True)
-
-    # 无站点项目：材料文本取代官网正文，成为品牌事实/竞品/问题库的推导底座
-    mat_path = G.project_dir(slug) / "content" / "materials.md"
-    materials = (getattr(a, "materials", "") or "").strip()
-    if materials:
-        src = Path(materials)
-        text = src.read_text("utf-8") if src.exists() else materials
-        mat_path.write_text(text, "utf-8")
-    elif no_site and not mat_path.exists():
-        mat_path.write_text(
-            f"# {name} · 商品/品牌介绍材料\n\n"
-            "> 无自有官网的项目，这份材料取代官网正文，是推导品牌事实、竞品与问题库的唯一依据。\n"
-            "> 写得越具体，推导越准；不知道的留空，不要编——bootstrap 会把空缺标成「待确认」。\n\n"
-            "## 它是什么\n（一句话定义：面向谁、属于什么品类、解决什么问题）\n\n"
-            "## 卖点与关键数字\n（规格、价格区间、产能、认证、销量等可核实的事实）\n\n"
-            "## 目标用户与典型场景\n\n"
-            "## 已知竞品\n（真实存在的品牌名，一行一个）\n\n"
-            "## 售卖/曝光渠道\n（天猫/京东/抖音店铺、小程序、线下门店等）\n", "utf-8")
-
     print(f"[geo] 项目已创建：{G.project_dir(slug)/'geo.json'}（品牌：{name}）")
-    if no_site:
-        print(f"[geo] 无站点模式：抓取/体检/站内资产不适用，其余流程照常")
-        print(f"[geo] 下一步：填写 {mat_path} 后跑 bootstrap")
-    else:
-        print("[geo] 下一步：让 Claude 补全 brand/competitors/questions，再跑 crawl")
+    print("[geo] 下一步：让 Claude 补全 brand/competitors/questions，再跑 crawl")
     return cfg
 
 
@@ -265,7 +233,7 @@ def cmd_sample(a):
 def cmd_sheet(a):
     import sample
 
-    sample.sheet(a.slug, intent=a.intent, limit=a.limit)
+    sample.sheet(a.slug)
 
 
 def cmd_import(a):
@@ -324,7 +292,8 @@ def cmd_generate(a):
     import generate
 
     generate.run(a.slug, which=a.asset.split(",") if a.asset else None,
-                 with_draft=a.draft, draft_limit=a.draft_limit)
+                 with_draft=a.draft, draft_limit=a.draft_limit,
+                 draft_question=a.question)
 
 
 def cmd_lint(a):
@@ -344,6 +313,14 @@ def cmd_lint(a):
             print(f"    [{i['level']}] {i['type']}：{i['detail']}")
             print(f"          …{i['excerpt'][:76]}")
     print("\n高风险项必须处理后才能发布；未核实数字需补来源与核验日期。\n")
+
+
+def cmd_smoke(a):
+    import smoke
+
+    result = smoke.run(a.slug, a.url, a.question, a.check_api)
+    if not result["ok"]:
+        raise SystemExit(1)
 
 
 def cmd_verify(a):
@@ -478,11 +455,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("init", help="新建项目")
-    s.add_argument("--url", default="", help="官网地址；无自有网站时留空并加 --no-site")
-    s.add_argument("--no-site", action="store_true", dest="no_site",
-                   help="无自有网站（电商商品/线下品牌/小程序等），需配 --name")
-    s.add_argument("--materials", default="",
-                   help="商品/品牌介绍材料：文件路径或直接给文本，取代官网正文作为推导底座")
+    s.add_argument("--url", required=True)
     s.add_argument("--name")
     s.add_argument("--slug")
     s.add_argument("--market", choices=["cn", "global", "both"], default="cn")
@@ -538,9 +511,6 @@ def main():
 
     s = sub.add_parser("sample-sheet", help="导出人工/浏览器采样表")
     s.add_argument("--slug", required=True)
-    s.add_argument("--intent", choices=["buyer"], default=None,
-                   help="buyer = 只出买家意图题（价格/推荐/比较/替代），适合每周轻量核查")
-    s.add_argument("--limit", type=int, default=None, help="每平台最多题数（周检建议 15–20）")
     s.set_defaults(func=cmd_sheet)
 
     s = sub.add_parser("sample-import", help="导入人工采样表")
@@ -574,14 +544,23 @@ def main():
 
     s = sub.add_parser("generate", help="产出可直接部署的资产（llms.txt/JSON-LD/片段/大纲）")
     s.add_argument("--slug", required=True)
-    s.add_argument("--asset", help="逗号分隔：llms,jsonld,snippets,outlines,attribution")
+    s.add_argument("--asset", help="逗号分隔：llms,jsonld,snippets,outlines,drafts（drafts 复用已有大纲）")
     s.add_argument("--draft", action="store_true", help="额外调用 LLM 出文章初稿")
     s.add_argument("--draft-limit", type=int, default=3, dest="draft_limit")
+    s.add_argument("--question", help="只为指定问题 ID 生成初稿（需同时使用 --draft）")
     s.set_defaults(func=cmd_generate)
 
     s = sub.add_parser("lint", help="检查 AI 初稿的编造风险（发布/交付前必跑）")
     s.add_argument("--slug", required=True)
     s.set_defaults(func=cmd_lint)
+
+    s = sub.add_parser("smoke", help="上线后验收看板与内容工作台（只读）")
+    s.add_argument("--slug", required=True)
+    s.add_argument("--url", default="http://127.0.0.1:8765")
+    s.add_argument("--question", help="指定用于工作台验收的问题 ID")
+    s.add_argument("--check-api", action="store_true", dest="check_api",
+                   help="额外发送一次最小 API 请求，会消耗少量额度")
+    s.set_defaults(func=cmd_smoke)
 
     s = sub.add_parser("verify", help="重抓并自动验收工单")
     s.add_argument("--slug", required=True)
@@ -596,7 +575,8 @@ def main():
     s = sub.add_parser("publish", help="把成稿/资产发布到已配置的渠道（永远手动触发）")
     s.add_argument("--slug", required=True)
     s.add_argument("--path", required=True, help="content/ 或 assets/ 下的相对路径")
-    s.add_argument("--platform", required=True, choices=["github", "wordpress", "wechat_draft", "webhook"])
+    s.add_argument("--platform", required=True,
+                   choices=["github", "wordpress", "wechat_draft", "webhook", "wisgate_cms"])
     s.add_argument("--title")
     s.set_defaults(func=cmd_publish)
 

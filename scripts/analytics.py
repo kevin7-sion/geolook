@@ -74,11 +74,9 @@ def health(slug: str, bp: dict | None, factcheck: list, rows_latest) -> dict:
     cfg = G.load_config(slug)
     own = _own_host(cfg)
     up = _unprompted(rows_latest)
-    # 无自有网站时「引用官网率」无从谈起——记 None（不适用），
-    # 由权重重整摊到其余维度，绝不退化成 0 假装"一次都没被引用"
     subs: dict[str, float | None] = {
         "mention": _mention(up),
-        "cite": _cite_share(up, own)[0] if G.has_site(cfg) else None,
+        "cite": _cite_share(up, own)[0],
         "channel": None, "content": None, "fact": None,
     }
     if bp:
@@ -204,27 +202,18 @@ def competitors(slug: str, rows_latest) -> dict:
         m = c.get("market")
         return [m] if m in ("cn", "global") else ["cn", "global"]
 
-    own_site = (cfg.get("brand", {}).get("site") or "").lower()
-    own_host = own_site.split("//")[-1].split("/")[0].removeprefix("www.")
-
     # 国内/海外各一张表：竞品只在自己市场（market 缺失时两边都算）的样本上算，分母各用各的
     tables: dict[str, list] = {}
-    source_gap: dict[str, list] = {}
     for market, rows in bym.items():
         n = len(rows)
         byp: dict[str, list] = {}
         for r in rows:
             byp.setdefault(r["platform"], []).append(r)
-        # 你被提及的样本引用过哪些域名——竞品信源与它做差集，剩下的就是「它有你没有」
-        mine_doms = {d for r in rows if r["analysis"].get("brand_mentioned")
-                     for d in (r["analysis"].get("cited_domains") or [])}
-        gap_count: dict[str, int] = {}
         t = []
         for c in comps:
             if market not in comp_markets(c):
                 continue
-            crows = [r for r in rows if c["name"] in (r["analysis"].get("competitors_mentioned") or [])]
-            hit = len(crows)
+            hit = sum(1 for r in rows if c["name"] in (r["analysis"].get("competitors_mentioned") or []))
             # 该竞品在各引擎的出现率——它最强的引擎就是最该去研究信源的地方
             tops = []
             for plat, rs in byp.items():
@@ -234,27 +223,11 @@ def competitors(slug: str, rows_latest) -> dict:
                                  "label": rs[0].get("platform_name", plat),
                                  "rate": round(h / len(rs), 2)})
             tops.sort(key=lambda x: -x["rate"])
-            # 信源构成：提到该竞品的答案都引用了谁（含你也被引用的，单独标出差集）
-            doms: dict[str, int] = {}
-            for r in crows:
-                for d in (r["analysis"].get("cited_domains") or []):
-                    if d and d != own_host:
-                        doms[d] = doms.get(d, 0) + 1
-            srcs = sorted(doms.items(), key=lambda x: -x[1])[:6]
-            for d, cnt in doms.items():
-                if d not in mine_doms:
-                    gap_count[d] = gap_count.get(d, 0) + cnt
             t.append({"name": c["name"], "market": c.get("market", "both"),
                       "presence": round(hit / n, 3) if n else None, "hits": hit,
-                      "top_engines": tops[:3],
-                      "top_sources": [{"domain": d, "hits": h, "covered": d in mine_doms}
-                                      for d, h in srcs]})
+                      "top_engines": tops[:3]})
         t.sort(key=lambda x: -(x["presence"] or 0))
         tables[market] = t
-        # 阵地差集：竞品语境里被引用 ≥2 次、且从未在你的语境里出现的域名
-        source_gap[market] = [{"domain": d, "hits": h}
-                              for d, h in sorted(gap_count.items(), key=lambda x: -x[1])
-                              if h >= 2][:10]
     # 兼容旧前端：合并平铺（同名取最高 presence）
     flat: dict[str, dict] = {}
     for x in sorted((x for t in tables.values() for x in t),
@@ -286,7 +259,6 @@ def competitors(slug: str, rows_latest) -> dict:
     lost.sort(key=lambda x: -x["rival_rate"])
     won.sort(key=lambda x: -x["mine"])
     return {"tables": tables, "table": table, "lost": lost[:8], "won": won[:8],
-            "source_gap": source_gap,
             "sample_n": len(up), "sample_ns": {m: len(rs) for m, rs in bym.items()}}
 
 
@@ -312,48 +284,6 @@ def _diagnose(m, rank_med, rival, rival_rate, neg_n):
         return {"type": "排名靠后", "sev": "P2",
                 "detail": f"被提及但位次中位 {rank_med}——内容要争首推理由"}
     return {"type": "表现正常", "sev": "ok", "detail": ""}
-
-
-# 意图分组的展示顺序与释义。价格/推荐/比较/替代 = 买家意图（离成交最近），
-# 场景/风险 = 需求教育，品牌验证是点名探测题（单独口径，不进可见性）。
-GROUP_META = [
-    ("推荐", "买家", "「有什么推荐」——最直接的选型入口"),
-    ("比较", "买家", "「A 和 B 哪个好」——竞品同框，输赢最明显"),
-    ("替代", "买家", "「有没有 X 的替代」——对手用户在换供应商"),
-    ("价格", "买家", "「多少钱/怎么收费」——离付款最近"),
-    ("场景", "教育", "具体场景怎么用——承接长尾需求"),
-    ("风险", "教育", "顾虑与边界——不答就被别人替你答"),
-    ("品牌验证", "探测", "点名问你是谁——考的是认知准确度，不计入提及率"),
-]
-
-
-def question_groups(qs: list[dict]) -> list[dict]:
-    """按意图分组聚合：哪一类问题上最没存在感，就该先补哪一类内容。
-    点名探测题（brand_probe）不参与提及率——它必然复述品牌名，混进来就是假阳性。"""
-    out = []
-    known = {g for g, _, _ in GROUP_META}
-    names = [g for g, _, _ in GROUP_META] + sorted({q.get("group") for q in qs
-                                                    if q.get("group") and q.get("group") not in known})
-    for name in names:
-        rows = [q for q in qs if q.get("group") == name]
-        if not rows:
-            continue
-        probe = [q for q in rows if q.get("brand_probe")]
-        real = [q for q in rows if not q.get("brand_probe")]
-        sampled = [q for q in real if q.get("mention") is not None]
-        hit = [q for q in sampled if (q.get("mention") or 0) > 0]
-        meta = next((m for m in GROUP_META if m[0] == name), (name, "其他", ""))
-        out.append({
-            "group": name, "kind": meta[1], "note": meta[2],
-            "total": len(rows), "probe": len(probe),
-            "sampled": len(sampled),
-            # 未采样时是 None（未测），不要退化成 0——那会读成「全军覆没」
-            "mention_rate": round(len(hit) / len(sampled), 3) if sampled else None,
-            "no_content": sum(1 for q in real if q.get("content") != "已成稿"),
-            "lost": sum(1 for q in real if q.get("diagnosis") and
-                        q["diagnosis"].get("type") in ("竞品主导", "完全缺席")),
-        })
-    return out
 
 
 def questions(slug: str, rows_latest, bp: dict | None) -> list[dict]:
@@ -462,17 +392,15 @@ def build(slug: str) -> dict:
     mfiles = sorted((pdir / "metrics").glob("*.json")) if (pdir / "metrics").exists() else []
     metrics = G.read_json(mfiles[-1], None) if mfiles else None
 
-    qs = questions(slug, rows_latest, bp)
     return {
         "latest_date": files[-1].stem if files else None,
         "health": health(slug, bp, fc, rows_latest),
         "engines": engines(slug, rows_latest, metrics),
-        "question_groups": question_groups(qs),
         "brand_dist": {m: _brand_dist([r for r in _unprompted(rows_latest)
                                        if r.get("market", "cn") == m])
                        for m in ("cn", "global")},
         "competitors": competitors(slug, rows_latest),
-        "questions": qs,
+        "questions": questions(slug, rows_latest, bp),
         "trend": trend(slug),
         "factcheck": fc,
         "q_delta": question_delta(slug),
@@ -491,9 +419,16 @@ def precheck(text: str) -> dict:
     body = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     wc = G.word_count(body)
     h2 = len(re.findall(r"^##\s|^<h2", body, re.M))
+    # A visible "待确认：3 个指标" is honest, but it is not a numeric fact and
+    # must not make the content pass the evidence-oriented extraction check.
+    verified_numbers = sum(
+        len(A.RE_NUMBER.findall(line))
+        for line in body.splitlines()
+        if not re.search(r"待确认|待补|\bTBD\b|to be confirmed", line, re.I)
+    )
     blocks = {
         "定义": bool(A.RE_DEFINITION.search(body)),
-        "数字事实": len(A.RE_NUMBER.findall(body)) >= 3,
+        "数字事实": verified_numbers >= 3,
         "对比": bool(A.RE_COMPARE.search(body)) or bool(re.search(r"^\|.*\|$", body, re.M)),
         "操作步骤": bool(A.RE_HOWTO.search(body)),
         "FAQ": bool(A.RE_FAQ.search(body)),
@@ -505,4 +440,5 @@ def precheck(text: str) -> dict:
     checks = [{"t": f"「{k}」块", "ok": v, "lift": BLOCK_LIFT[k]} for k, v in blocks.items()]
     checks.insert(0, {"t": f"正文 {wc} 词（门槛 1000）", "ok": wc >= 1000, "lift": ""})
     checks.insert(1, {"t": f"H2 小节 {h2} 个（目标 ≥6）", "ok": h2 >= 6, "lift": ""})
-    return {"grade": grade, "wc": wc, "h2": h2, "blocks": blocks, "checks": checks}
+    return {"grade": grade, "wc": wc, "h2": h2, "blocks": blocks,
+            "verified_numbers": verified_numbers, "checks": checks}

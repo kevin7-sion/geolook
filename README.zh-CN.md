@@ -10,8 +10,6 @@
 
 ![License](https://img.shields.io/badge/license-MIT-9184d9) ![Python](https://img.shields.io/badge/python-3.9%2B-9184d9) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-9184d9) ![Deps](https://img.shields.io/badge/deps-requests%20·%20bs4%20·%20lxml-9184d9)
 
-<a href="https://www.producthunt.com/products/geolook?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-geolook" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1211264&theme=dark&t=1786200566986" alt="GeoLook - 开源自托管的全流程 GEO 实施平台 | Product Hunt" width="250" height="54" /></a>
-
 ![产品演示](docs/demo.gif)
 
 🌐 [官网 geolook.cc](https://geolook.cc) · 🔍 [在线演示（只读）](https://geolook.cc/demo/) · 📹 [高清演示视频 (mp4)](docs/demo.mp4) · 🖼 [全部截图](docs/screenshots/)
@@ -40,36 +38,32 @@
 
 ### 现状 · 我在 AI 里什么样
 
-- **引擎表现**：国内海外 17 个引擎（10 个 API 自动采样 + 7 个人工采样，含 Google AI Overviews 与秘塔），每个引擎的提及率、提及位次、引用份额、它实际在引用谁、**样本回放**（真实回答原文，品牌命中高亮）、疑似负面标记
+- **引擎表现**：国内海外 15 个引擎（10 个 API 自动采样 + 5 个人工采样表），每个引擎的提及率、提及位次、引用份额、它实际在引用谁、**样本回放**（真实回答原文，品牌命中高亮）、疑似负面标记
 - **品牌提及分布**：单引擎与全引擎汇总，回答里你和竞品各占多少（国内/海外分开算）
-- **竞品对比**：同一批无提示样本下的对手出现率；**每个对手最强的引擎**一键联动；每个对手的**信源构成**（它被谁引用）与「竞品有、你没有的信源」阵地差集——输给谁升级为输在哪块阵地；「被抢走的问题」「你独占的问题」直接变成选题池
-- **问题库**：七组问题（推荐/比较/替代/价格/风险/品牌验证/场景），**意图分组卡**（买家/教育/探测三类，一眼看出哪类问题上最没存在感）；每题带**诊断分型**（疑似负面 > 竞品主导 > 完全缺席 > 排名靠后），点名探测题单独归类不污染指标
-- **样本库**：每条 AI 答案的元数据可浏览、可人工复核纠正——正则判读的撞词/否定语境误判在这里修，改完立刻重算指标、重跑不覆盖人工结论；每条样本带**引用源站构成**（域名 × 次数 · 占比）与采样环境溯源（沙箱/无痕/专用号/个人号，个人号自动降级待复核）
+- **竞品对比**：同一批无提示样本下的对手出现率；**每个对手最强的引擎**一键联动；「被抢走的问题」「你独占的问题」直接变成选题池
+- **问题库**：七组问题（推荐/比较/替代/价格/风险/品牌验证/场景），每题带**诊断分型**（疑似负面 > 竞品主导 > 完全缺席 > 排名靠后），点名探测题单独归类不污染指标
 - **拓词选题**：以品牌/竞品/品类为词根，拉**百度下拉 + Google 补全**的真实搜索词扩充选题（免费公开端点，无需 Key）；每期快照 diff 标「需求上升」参与选题排序；竞品词根扩出的替代/对比问法直达竞品对比页。只产候选，入库手动勾选，不动指标口径
 
 ![引擎表现](docs/screenshots/engines.png)
-![样本库](docs/screenshots/samples.png)
 
 ### 诊断 · 为什么是这样
 
-- **站点体检**：按「**访问 → 定向 → 理解 → 可引用**」四层依赖链组织——每层依赖上一层，访问层失败时下游一切优化在引擎侧不可见，修复顺序算给你。访问层远不止查 robots：RFC 9309 规范的 robots 解析（通配符组封禁、多 UA 共享组、specificity 覆盖这些逐行正则漏掉的都能检出）、**换真实 AI 爬虫 UA 的 WAF/CDN 差异探测**（robots 放行但 CDN 403，浏览器里看不出来）、X-Robots-Tag 头级 noindex、llms.txt 链接有效性、hreflang 覆盖、sitemap 索引污染与重复标题/近重复正文检测；**段落级可引分析**——检索按段落选材，整页无一段自包含可引的页面会被点名并给出改法。点等级或缺块直接筛选问题页、直达修复工单
+- **站点体检**：robots 封禁 / sitemap / llms.txt / 页面可访问 / 语言覆盖 / 抽取块缺口，六维打分；点等级或缺块直接筛选问题页、直达修复工单
 - **差距诊断**：内容缺口 → 阵地缺口 → 事实偏差，三类按「先修哪个」排序
 - **阵地地图**：19 个阵地（百科/榜单站/公众号/头条/知乎/技术社区/G2/Wikipedia/Reddit/YouTube…）按真实引用语料标注分量与优先级；每个阵地写清**建什么、建多少、节奏、谁来做**
 - **品牌事实库**：全站唯一口径来源——llms.txt、JSON-LD、内容草稿都从这里取事实；AI 说法逐条比对，比对过「事实一致性」才进健康分
 
-![站点体检 · 四层链条](docs/screenshots/siteaudit.png)
 ![阵地地图](docs/screenshots/channels.png)
 
 ### 提升 · 该做什么
 
-- **行动计划**：结构化工单（依据/负责角色/工作量/时间窗口/验收标准）带独立**风险分级**（低风险快速优化 / 需观察·发布后 7/14/28 天复核 / 高风险技术改造·备份小批量留回滚——优先级说多重要，风险说动手时多小心）；标「自动」的由重抓站点 + 下期采样判定；量化工单显示「首测 → 当前 → 目标」进度条，回归自动打回；工单直达它最该写的那道题
+- **行动计划**：结构化工单（依据/负责角色/工作量/时间窗口/验收标准），标「自动」的由重抓站点 + 下期采样判定；量化工单显示「首测 → 当前 → 目标」进度条，回归自动打回
 - **内容工作台**：选题池按「未提及 + 无内容」排序；写稿时左侧给必含抽取块与品牌事实，右侧实时**可被引用度预检**；AI 初稿必须过编造风险 lint；**分发清单**按问题类别匹配目标阵地，铺完打勾
-- **部署资产**：llms.txt、JSON-LD（Organization/FAQ/Article…）、定义块与 FAQ 的 HTML 片段，每个文件标注去处；**AI 流量归因包**（GA4「AI 引擎」渠道组正则 + 服务器日志统计脚本 + 来源快照说明，把闭环从「被引用」延伸到「带来转化」）；DEPLOY.md 给开发的部署清单含验收标准
-- **发布渠道**：按**通用 / 国内 / 海外**分组——GitHub、WordPress 草稿、公众号草稿箱、Webhook，加真实接入的 **X**（标题+摘要+自动回链的引流推文）与 **Reddit**（markdown 全文自帖）；每个渠道配置弹窗内置分步教程与申请页直达；每篇成稿可勾选多渠道一次发布，发布状态同步回行动计划、待发布清单与问题库。没有个人可用官方 API 的平台（微博/小红书/头条/B站/LinkedIn/Facebook/Instagram）**刻意不接**——宁可不接不做假接入，页面写明原因并给 Webhook 桥接。凭证在本地 `.env`，每次发布逐篇人工确认，无任何自动外发路径
+- **部署资产**：llms.txt、JSON-LD（Organization/FAQ/Article…）、定义块与 FAQ 的 HTML 片段，每个文件标注去处；DEPLOY.md 给开发的部署清单含验收标准
+- **发布渠道**：成稿一键发到 GitHub / WordPress 草稿 / 公众号草稿箱 / 自定义 Webhook——凭证在本地 `.env`，每次发布人工确认，无任何自动外发路径
 
 ![行动计划](docs/screenshots/plan.png)
 ![内容工作台](docs/screenshots/workbench.png)
-![发布渠道](docs/screenshots/publishing.png)
 
 ### 成效 · 做了有没有用
 
@@ -78,13 +72,9 @@
 
 ### 运营
 
-- **周期复跑**：每 7/14/30 天自动跑完整一期；`./scripts/service.sh install` 把看板注册为 **macOS 常驻服务**（登录自启、崩溃自动拉起、关终端不停），到期必跑，真正无人值守
+- **周期复跑**：每 7/14/30 天自动跑完整一期，做长期运营与月报
 - **多品牌**：一个实例管多个项目，数据互相隔离，侧栏一键切换
-- **人工采样闭环**：无 API 的引擎导出采样表（`--intent buyer --limit 20` 出每周买家意图轻量周检表），人工/浏览器填完回灌，与自动采样同一套指标
-
-### 采样助手（Chrome 插件，`extension/`）
-
-无 API 的引擎恰恰是真实用户最多的入口。侧栏载入买家意图队列（按分组分节）→ 填入问题（默认手动模式**回车由你按**）→ 答案生成完一键提取全文与全部引用链接 → 回传本机看板入库为 A 级样本——每周核查从半小时压到十分钟。可显式开启「自动跑队列」（人在场、限速、上限 20 题、撞验证码/风控立刻停，ToS 风险在其 README 如实写明）。配套 `sandbox.sh`：一条命令起**一次性干净沙箱**（无历史无 Cookie、插件自动装载）或持久登录沙箱——「陌生买家看到什么」的采样卫生从纪律变成一条命令。
+- **人工采样闭环**：无 API 的引擎导出采样表，人工/浏览器填完回灌，与自动采样同一套指标
 
 ## 三、和市面 GEO 工具的区别
 
@@ -121,8 +111,6 @@ pip3 install requests beautifulsoup4 lxml
 
 # 2. 启动看板（自动打开浏览器）
 python3 scripts/geo.py ui        # → http://127.0.0.1:8765
-#    macOS 可注册为常驻服务：./scripts/service.sh install
-#   （登录自启、崩溃自动拉起、关终端不停）
 
 # 3.（可选）配置引擎 API Key
 #    方式 A：看板「设置 → 引擎与密钥」里点「配置」填入，自动写进本地 .env
@@ -131,24 +119,21 @@ python3 scripts/geo.py ui        # → http://127.0.0.1:8765
 
 **一个 Key 都不配也能用**：自动采样会跳过，改用「导出人工采样表 → 人工/浏览器采样 → 回灌」的流程；抓站、体检、工单、资产等功能不依赖任何 Key。配一个国内引擎 Key（如 DeepSeek/GLM）即可解锁「自动推导问题库/品牌事实」和「AI 初稿」。
 
+### 自定义 OpenAI 兼容 API
+
+在「设置 → 引擎与密钥」中选择「自定义 OpenAI 兼容 API」，填写显示名称、API Base URL、Chat Completions 路径、模型名、API Key 和采样市场即可绑定自建、代理或第三方端点。路径可填 `chat/completions` 或 `v1/chat/completions`；密钥只保存在本机 `.env`，不会写入项目数据或 Git。
+
 ### 服务器/远程部署
 
-服务默认只绑定 `127.0.0.1`。要远程访问，两种方式：
+服务只绑定 `127.0.0.1`（刻意的安全边界，无认证体系）。要远程访问：
 
 ```bash
-# 方式 A（推荐）：SSH 隧道，不暴露任何端口
+# 推荐：SSH 隧道
 ssh -N -L 8765:127.0.0.1:8765 user@your-server
 # 然后本地浏览器打开 http://127.0.0.1:8765
-
-# 方式 B：绑定公网 + 访问令牌（两个变量缺一不可，不设令牌会拒绝启动）
-export GEOLOOK_TOKEN=$(openssl rand -hex 16)
-export GEOLOOK_HOST=0.0.0.0
-python3 scripts/geo.py ui
-# 浏览器首次访问输入令牌（或打开 http://server:8765/?token=令牌），
-# 之后凭 HttpOnly cookie 访问；API 调用带 X-Geolook-Token 头
 ```
 
-公网部署建议再套一层 HTTPS 反向代理（nginx/caddy），令牌走明文 HTTP 会被中间人看到。`.env` 与 `work/` 含密钥和项目数据，注意文件权限。
+多人使用请自行加反向代理 + 认证（nginx basic auth / OAuth proxy 等）。`.env` 与 `work/` 含密钥和项目数据，注意文件权限。
 
 ### 升级
 
@@ -185,23 +170,10 @@ python3 scripts/geo.py new --url https://example.com --market both
 
 **第 7 步 · 长期运营**：「设置」开启周期复跑（每 7/14/30 天自动跑一期）；「报告与交付」生成月报与客户交付包。
 
-### 没有官网的商品/品牌
-
-没有自有网站也能做 GEO——官网只占国内引用的 1.37%，AI 可见性主要靠外部阵地：
-
-```bash
-python3 scripts/geo.py init --no-site --name "商品名" --materials 介绍材料.md --market cn
-```
-
-介绍材料取代官网正文，成为品牌事实、竞品与问题库的推导底座（不给 `--materials`
-会生成模板让你填）。差异只有三处：抓取/体检自动跳过、llms.txt 与 JSON-LD 不产出
-（需挂自有域名）、**引用官网率显示「不适用」而非 0**。其余全部照常。
-
 ### 无 API 引擎的人工采样
 
 ```bash
 python3 scripts/geo.py sample-sheet --slug <项目>    # 导出采样表（含每题指引）
-python3 scripts/geo.py sample-sheet --slug <项目> --intent buyer --limit 20  # 每周买家意图周检表
 # 人工/浏览器在纳米AI、百度AI、ChatGPT网页版等提问并粘贴回答
 python3 scripts/geo.py sample-import --slug <项目> --file <采样表>
 ```
@@ -250,7 +222,15 @@ python3 scripts/geo.py sample-import --slug <项目> --file <采样表>
 - **单机自托管**：标准库 `http.server` 只绑 127.0.0.1；无数据库无账号，数据即文件
 - **宁缺毋滥**：品牌事实只从官网正文抽取，抽不到标「待确认」；竞品严禁发明名字；AI 初稿必须过 lint 并人工核实
 - **验收即产品**：能自动判定的绝不靠人回填
-- **发布永远手动**：渠道凭证在本地 `.env`（权限 600），每次发布人工点击确认；公众号/WordPress 只进草稿箱
+- **发布永远手动**：渠道凭证在本地 `.env`（权限 600），每次发布人工点击确认；公众号/WordPress/WisGate CMS 只进草稿箱
+
+### 导入 WisGate CMS 草稿
+
+在看板进入「设置 → 发布渠道 → WisGate CMS → 配置」，在密码输入框填写 `WISGATE_CMS_TOKEN` 并保存。默认使用 Directus 风格接口：API 地址 `https://cms.wisgate.ai`、集合 `blogs`。每次导入会写入 `status=draft`、`title`、`slug`、`summary`、`content`、`publish_time`、`tags` 和 `platform=wisdom-gate`；`model` 默认保持空白。摘要从正文首段提取，并限制在 240 个字符内以适配 CMS 字段；标签从标题和小节自动生成至少 3 个英文相关关键词，首个标签来自标题中的主关键词。标签字段为 JSON 时选 `json`，普通文本列时选 `csv`。封面图没有可靠的文件 ID 时留空；有 Directus 文件 ID 时填写 `cover_image_value`，不要填造出的图片链接。WisGate CMS 的 `content` 是 Markdown 富文本字段，GeoLook 会固定以 `markdown` 推送；旧配置中的 `html` 会自动迁移，避免在正文中显示 HTML 标签。
+
+随后在「内容工作台」打开已发布为成稿的文章，点「发布到渠道 → WisGate CMS」，确认后只会创建 CMS 草稿，不会自动对外发布。Token 仅写入本机 `.env`，看板不回显，发布记录也不会保存 Token。
+
+推送前会先打开发布审核窗口，展示标题、Summary、Slug、Status、Platform、Model、正文格式/字数和 3 个展开的关键词输入框。系统会针对当前成稿重新检查风险，并显示风险等级、章节、行号和原文片段。你可以返回修改，也可以保持原样；点击「确认并创建 CMS 草稿」后，只有确认过的 3 个标签才会随正文提交。
 
 ## 与 Claude Code 集成（可选）
 
@@ -259,9 +239,8 @@ python3 scripts/geo.py sample-import --slug <项目> --file <采样表>
 ## 目录结构
 
 ```
-scripts/          全部逻辑（geo.py CLI · dashboard.py 看板服务 · ui.html 单页前端 · service.sh 常驻服务）
-extension/        Chrome 采样助手插件 + sandbox.sh 沙箱 + 自带 e2e 测试
-references/       方法论：采样纪律、内容模式实测、归因口径、国内外平台引用结构
+scripts/          全部逻辑（geo.py CLI 入口 · dashboard.py 看板服务 · ui.html 单页前端）
+references/       方法论：采样纪律、内容模式实测、国内外平台引用结构
 tests/            单元测试
 work/<slug>/      每个项目的全部数据（gitignore，不出本机）
 docs/             截图与 40 秒演示视频

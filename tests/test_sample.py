@@ -162,6 +162,17 @@ class TestAskRetry(unittest.TestCase):
         self.assertFalse(res["ok"])
         self.assertEqual(post.call_count, 1)
 
+    def test_retry_on_system_busy_wrapped_as_403(self):
+        res, post = self._ask([_Resp(403, text="System busy, please try again later."),
+                               _Resp(200, OK_PAYLOAD)])
+        self.assertTrue(res["ok"])
+        self.assertEqual(post.call_count, 2)
+
+    def test_no_retry_on_regular_403(self):
+        res, post = self._ask([_Resp(403, text="invalid API key")] * 5)
+        self.assertFalse(res["ok"])
+        self.assertEqual(post.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
