@@ -42,6 +42,12 @@ UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 geo-skill/1.0"
 )
+# 403/406 回退用：不带 geo-skill 标记的纯浏览器 UA。很多 WAF 规则只拦
+# 「带工具标记的 UA」，回退能区分「拦工具」还是「拦 IP」，这本身是诊断信号。
+UA_BROWSER = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 # ---------------------------------------------------------------- 基础工具
 
@@ -100,6 +106,13 @@ def load_config(slug: str) -> dict:
     return json.loads(p.read_text("utf-8"))
 
 
+def has_site(cfg: dict) -> bool:
+    """项目有没有自有网站。无站点项目（电商商品、线下品牌、小程序等）同样能做 GEO：
+    抓取/体检/站内资产这几步不适用，但采样、竞品、阵地、内容、验收全都照常。
+    判据只看 brand.site 是否为空——不引入第二个真相源。"""
+    return bool((cfg.get("brand") or {}).get("site", "").strip())
+
+
 def save_config(slug: str, cfg: dict):
     """写配置前先备份。geo.json 里是一期的人工投入（问题库、竞品、口径），
     被误覆盖的代价远大于留几个备份文件。"""
@@ -146,7 +159,10 @@ def read_jsonl(path: Path):
     if not p.exists():
         return []
     out = []
-    for line in p.read_text("utf-8").splitlines():
+    # 必须按 "\n" 切，不能用 splitlines()：后者还会在 U+2028/U+2029/U+0085/\v/\f
+    # 处断行，而 json.dumps 不转义这些字符，抓到含 U+2028 的页面就会把一条记录
+    # 劈成两半 → JSONDecodeError，整期体检中断。
+    for line in p.read_text("utf-8").split("\n"):
         line = line.strip()
         if line:
             out.append(json.loads(line))
@@ -175,19 +191,28 @@ def is_fetchable(url: str) -> bool:
 
 
 
-def fetch(url: str, timeout: int = 12, retries: int = 1) -> dict:
-    """返回 {url, final_url, status, html, elapsed, error}。只读网页，且有体积上限。"""
+def fetch(url: str, timeout: int = 12, retries: int = 1, ua: str | None = None) -> dict:
+    """返回 {url, final_url, status, html, x_robots_tag, elapsed, error}。只读网页，且有体积上限。
+    ua 可换成 AI 爬虫的 User-Agent 做差异探测（WAF/CDN 是否单独拦 AI 爬虫）。"""
     if not is_fetchable(url):
         return {"url": url, "final_url": url, "status": 0, "html": "", "content_type": "",
-                "elapsed": 0, "error": "跳过：不是网页（下载/媒体/静态资源）"}
+                "x_robots_tag": "", "elapsed": 0, "error": "跳过：不是网页（下载/媒体/静态资源）"}
     last = ""
-    for attempt in range(retries + 1):
+    # 调用方没指定 UA 时，默认 UA 被 403/406 拦截后换纯浏览器 UA 再试一轮：
+    # 站长在自己站上做诊断，绕过自家 WAF 的工具规则是合理的，且结果会标注出来
+    ua_plan = [ua or UA] + ([UA_BROWSER] if ua is None else [])
+    for ua_idx, cur_ua in enumerate(ua_plan):
+      for attempt in range(retries + 1):
         try:
             t0 = time.time()
+            headers = {"User-Agent": cur_ua, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"}
+            if ua_idx > 0:
+                headers["Accept"] = ("text/html,application/xhtml+xml,application/xml;"
+                                     "q=0.9,image/avif,image/webp,*/*;q=0.8")
             r = requests.get(
                 url,
                 timeout=timeout,
-                headers={"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"},
+                headers=headers,
                 allow_redirects=True,
                 stream=True,
             )
@@ -196,11 +221,18 @@ def fetch(url: str, timeout: int = 12, retries: int = 1) -> dict:
                 r.close()
                 time.sleep(1.5)
                 continue
+            # 默认 UA 被拦（403/406 是 WAF 的典型手势）→ 跳出内层，换浏览器 UA
+            if r.status_code in (403, 406) and ua_idx + 1 < len(ua_plan):
+                r.close()
+                last = f"HTTP {r.status_code}（默认 UA 被拦）"
+                break
             ctype = r.headers.get("Content-Type", "")
+            xrobots = r.headers.get("X-Robots-Tag", "")
             if ctype and not any(k in ctype.lower() for k in ("html", "text/plain", "xml")):
                 r.close()
                 return {"url": url, "final_url": r.url, "status": r.status_code, "html": "",
-                        "content_type": ctype, "elapsed": round(time.time() - t0, 2),
+                        "content_type": ctype, "x_robots_tag": xrobots,
+                        "elapsed": round(time.time() - t0, 2),
                         "error": f"跳过非网页内容（{ctype.split(';')[0]}）"}
             chunks, size = [], 0
             for chunk in r.iter_content(65536):
@@ -220,14 +252,17 @@ def fetch(url: str, timeout: int = 12, retries: int = 1) -> dict:
                 "status": r.status_code,
                 "html": raw.decode(enc, "replace"),
                 "content_type": ctype,
+                "x_robots_tag": xrobots,
                 "elapsed": round(time.time() - t0, 2),
                 "error": None,
+                "ua_fallback": ua_idx > 0,
             }
         except Exception as e:  # noqa: BLE001
             last = f"{type(e).__name__}: {e}"
             if attempt < retries:
                 time.sleep(1.5)
-    return {"url": url, "final_url": url, "status": 0, "html": "", "content_type": "", "elapsed": 0, "error": last}
+    return {"url": url, "final_url": url, "status": 0, "html": "", "content_type": "",
+            "x_robots_tag": "", "elapsed": 0, "error": last}
 
 
 def fetch_text(url: str, timeout: int = 8) -> str:
@@ -239,6 +274,74 @@ def fetch_text(url: str, timeout: int = 8) -> str:
     except Exception:  # noqa: BLE001
         pass
     return ""
+
+
+# ---------------------------------------------------------------- robots.txt
+# 按 RFC 9309 语义解析，而不是逐行正则：三个最容易误判的点——
+#   1. 多个 User-agent 行共享同一组规则（组内第一个 UA 后面的会被逐行正则漏掉）
+#   2. 具体 UA 组存在时通配符组整组失效（specificity，不看先后顺序）
+#   3. 规则按最长路径匹配定胜负，同长时 Allow 胜出；支持 * 与 $ 通配符
+# 所以「User-agent: * / Disallow: /」会封掉所有没有专属组的 AI 爬虫，
+# 而「User-agent: GPTBot / Allow: /」会让 GPTBot 无视通配符组里的任何 Disallow。
+
+
+def robots_parse(txt: str) -> list[dict]:
+    """解析成 [{agents: [ua...], rules: [(allow, path)]}]。空 Disallow 值 = 全放行，不算规则。"""
+    groups: list[dict] = []
+    cur = None
+    last_was_agent = False
+    for raw in (txt or "").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        field, _, value = line.partition(":")
+        field, value = field.strip().lower(), value.strip()
+        if field == "user-agent":
+            if cur is None or not last_was_agent:
+                cur = {"agents": [], "rules": []}
+                groups.append(cur)
+            cur["agents"].append(value.lower())
+            last_was_agent = True
+        elif field in ("allow", "disallow"):
+            last_was_agent = False
+            if cur is not None and value:
+                cur["rules"].append((field == "allow", value))
+        else:
+            last_was_agent = False
+    return groups
+
+
+def _robots_rule_rx(pattern: str) -> re.Pattern:
+    rx = re.escape(pattern).replace(r"\*", ".*")
+    if rx.endswith(r"\$"):
+        rx = rx[:-2] + "$"
+    return re.compile("^" + rx)
+
+
+def robots_decision(groups: list[dict], ua: str, path: str) -> tuple[bool, str | None]:
+    """某个爬虫（产品名，如 'GPTBot'）能否抓某路径。返回 (允许?, 命中的规则文本)。"""
+    ua_l = (ua or "").lower()
+    specific, spec_len, wildcard = None, -1, None
+    for g in groups:
+        for a in g["agents"]:
+            if a == "*":
+                if wildcard is None:
+                    wildcard = g
+            elif a and (a in ua_l or ua_l in a) and len(a) > spec_len:
+                specific, spec_len = g, len(a)
+    g = specific or wildcard
+    if not g:
+        return True, None
+    path = path or "/"
+    match_len, allowed, rule = -1, True, None
+    for allow, pat in g["rules"]:
+        if _robots_rule_rx(pat).match(path):
+            plen = len(pat)
+            # 最长匹配优先；同长时 Allow 胜出
+            if plen > match_len or (plen == match_len and allow and not allowed):
+                match_len, allowed = plen, allow
+                rule = ("Allow: " if allow else "Disallow: ") + pat
+    return allowed, rule
 
 
 def same_site(a: str, b: str) -> bool:
