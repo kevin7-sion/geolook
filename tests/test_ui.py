@@ -151,20 +151,26 @@ class DocumentLangCase(unittest.TestCase):
         self.assertIn("/api/publish-preview/'+SLUG", self.html)
         self.assertIn("CMS 发布前审核", self.html)
         self.assertIn("publishCmsReviewed()", self.html)
-        self.assertIn("options:{tags}", self.html)
+        self.assertIn("options:{summary,slug,tags}", self.html)
         self.assertIn("关键词 / Tags（固定 3 个）", self.html)
         self.assertIn("请填写完整的 3 个关键词标签", self.html)
 
     def test_cms_publish_review_shows_metadata_and_located_lint_issues(self):
         self.assertIn('>Title</div>', self.html)
-        self.assertIn("r.title||'未设置标题'", self.html)
-        self.assertIn("const title=($('#cms-review-title')?.textContent||'').trim()", self.html)
-        self.assertIn("path:rel,title,options:{tags}", self.html)
+        self.assertIn('id="cms-review-title"', self.html)
+        self.assertIn("const title=($('#cms-review-title')?.value||'').trim()", self.html)
+        self.assertIn("path:rel,title,options:{summary,slug,tags}", self.html)
         self.assertIn("<label>Summary</label>", self.html)
+        self.assertIn('id="cms-review-summary"', self.html)
         self.assertIn(">Slug</div>", self.html)
+        self.assertIn('id="cms-review-slug"', self.html)
         self.assertIn("Status: ${esc(r.status||'draft')}", self.html)
         self.assertIn("第 ${esc(String(i.line||'?'))} 行", self.html)
         self.assertIn("保持原样并创建 CMS 草稿", self.html)
+        self.assertIn("点击页面空白处不会关闭此窗口", self.html)
+        self.assertIn("{dismiss:false}", self.html)
+        self.assertIn('id="cms-review-submit"', self.html)
+        self.assertIn("正在创建 CMS 草稿…", self.html)
 
 
 if __name__ == "__main__":

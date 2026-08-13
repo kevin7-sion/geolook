@@ -176,6 +176,12 @@ class WisGateCmsPublishTest(unittest.TestCase):
         text = "# Title\n\n" + ("A sentence with useful implementation detail. " * 20)
         self.assertLessEqual(len(P._cms_summary(text, "Title")), 240)
 
+    def test_summary_ignores_geolook_comments_frontmatter_and_rules(self):
+        text = "<!-- target question q122 -->\n---\nkeywords: API gateway\n---\n\n# Useful title\n\nA reader-facing summary with implementation detail."
+
+        self.assertEqual(P._cms_summary(text, "Useful title"),
+                         "A reader-facing summary with implementation detail.")
+
     @mock.patch.object(P.requests, "post")
     def test_always_sends_canonical_slug_for_non_latin_titles(self, post):
         post.return_value = _Response(201, {"data": {"id": "43"}})
@@ -188,8 +194,73 @@ class WisGateCmsPublishTest(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         body = post.call_args.kwargs["json"]
+        self.assertEqual(body["title"], "中文标题")
+        self.assertEqual(body["headline"], "中文标题")
         self.assertRegex(body["slug"], r"^geolook-[a-f0-9]{12}$")
         self.assertEqual(body["url_key"], body["slug"])
+
+    def test_title_extraction_handles_geolook_preamble_and_inline_markdown(self):
+        text = "\ufeff<!-- target question q108 -->\n---\nkeywords: api gateway\n---\n\n# **Practical** [API Guide](https://example.com)\n"
+
+        self.assertEqual(P._title_of(text, "q108.md"), "Practical API Guide")
+
+    def test_title_extraction_accepts_html_headings_and_has_filename_fallback(self):
+        self.assertEqual(P._title_of("<h2>Imported API Guide</h2>\n<p>Body</p>", "q109.md"),
+                         "Imported API Guide")
+        self.assertEqual(P._title_of("<p>Draft with no heading</p>", "q110.md"), "q110")
+
+    def test_title_falls_back_to_question_text_before_internal_filename(self):
+        cfg = P.G.load_config(self.slug)
+        cfg["questions"] = [{"id": "q122", "text": "What is the difference between replicate and copy?"}]
+        P.G.save_config(self.slug, cfg)
+
+        self.assertEqual(P._title_of("<p>Imported body</p>", "q122-成稿.md", self.slug),
+                         "What is the difference between replicate and copy?")
+
+    @mock.patch.object(P.requests, "post")
+    def test_cms_uses_reviewed_summary_and_slug(self, post):
+        post.return_value = _Response(201, {"data": {"id": "40"}})
+
+        result = P.publish(self.slug, "wisgate_cms", "content/article.md", "Reviewed title",
+                           options={"summary": "Reviewed summary", "slug": "reviewed-post",
+                                    "tags": ["API gateway", "Model routing", "Developer tools"]})
+
+        self.assertTrue(result["ok"])
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["title"], "Reviewed title")
+        self.assertEqual(body["summary"], "Reviewed summary")
+        self.assertEqual(body["slug"], "reviewed-post")
+
+    @mock.patch.object(P.requests, "post")
+    def test_duplicate_cms_slug_retries_with_a_unique_draft_slug(self, post):
+        post.side_effect = [
+            _Response(400, {"errors": [{"message": "duplicate", "extensions": {
+                "field": "slug", "code": "RECORD_NOT_UNIQUE"}}]}),
+            _Response(201, {"data": {"id": "39"}}),
+        ]
+
+        result = P.publish(self.slug, "wisgate_cms", "content/article.md", "Practical API Guide")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(post.call_count, 2)
+        first = post.call_args_list[0].kwargs["json"]
+        second = post.call_args_list[1].kwargs["json"]
+        self.assertEqual(first["slug"], "practical-api-guide")
+        self.assertRegex(second["slug"], r"^practical-api-guide-\d{14}$")
+        self.assertEqual(result["status"], "draft")
+        self.assertIn("原 Slug 已存在", result["note"])
+
+    @mock.patch.object(P.requests, "post")
+    def test_cms_title_is_never_empty_for_html_heading_drafts(self, post):
+        post.return_value = _Response(201, {"data": {"id": "41"}})
+        (self.project / "content" / "article.md").write_text(
+            "<!-- imported -->\n<h2>HTML Source Title</h2>\n\nBody.", "utf-8"
+        )
+
+        result = P.publish(self.slug, "wisgate_cms", "content/article.md")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(post.call_args.kwargs["json"]["title"], "HTML Source Title")
 
     @mock.patch.object(P.requests, "post")
     def test_rejects_unsafe_api_configuration_without_a_request(self, post):

@@ -187,7 +187,8 @@ let ST={gapTab:'content',engSel:null,wq:null,obStep:1,obSlug:null,obNoSample:fal
 
 function toast(m,k=''){const t=document.createElement('div');t.className='toast '+k;t.textContent=m;
   $('#toast').appendChild(t);setTimeout(()=>t.remove(),3800)}
-function modal(h){$('#modal').innerHTML=`<div class="modal" onclick="if(event.target===this)closeModal()"><div class="box">${h}</div></div>`}
+function modal(h,opt={}){const dismiss=opt.dismiss!==false;
+  $('#modal').innerHTML=`<div class="modal" ${dismiss?'onclick="if(event.target===this)closeModal()"':''}><div class="box">${h}</div></div>`}
 function closeModal(){$('#modal').innerHTML=''}
 function go(r,extra,fromPop){R=r;Object.assign(ST,extra||{});
   // 接入浏览器历史：每次页面跳转压一条记录，后退/前进在应用内导航而不是退出应用
@@ -1922,19 +1923,19 @@ async function cmsKeywordReview(){
   const issues=Array.isArray(r.issues)?r.issues:[];
   const high=issues.filter(x=>x.level==='高').length;
   modal(`<h4 style="font-size:17px">CMS 发布前审核</h4>
-    <p class="muted" style="font-size:12px;margin-top:4px">以下内容来自当前成稿。审核窗口不会创建 CMS 内容；修改成稿或标签后，再点确认创建草稿。</p>
+    <p class="muted" style="font-size:12px;margin-top:4px">以下内容来自当前成稿。这里不会创建 CMS 内容；检查并按需修改元数据后，再点确认创建草稿。点击页面空白处不会关闭此窗口。</p>
     <div class="card" style="padding:12px 14px;gap:6px;margin-top:8px">
       <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600)">Title</div>
-      <div id="cms-review-title" style="font-size:19px;line-height:1.35;font-weight:600;color:var(--t200);overflow-wrap:anywhere">${esc(r.title||'未设置标题')}</div>
+      <input id="cms-review-title" class="input" style="font-size:16px;font-weight:600" value="${esc(r.title||'')}">
     </div>
-    <div class="field"><label>Summary</label><textarea class="input" style="min-height:66px" readonly>${esc(r.summary||'')}</textarea></div>
+    <div class="field"><label>Summary</label><textarea id="cms-review-summary" class="input" style="min-height:66px" maxlength="240">${esc(r.summary||'')}</textarea><div class="muted" style="font-size:11px">最多 240 个字符；会直接写入 CMS。</div></div>
     <div class="row" style="gap:10px;margin:2px 0 8px;font-size:12px">
       <span class="tag tag-outline">Status: ${esc(r.status||'draft')}</span>
       <span class="tag tag-outline">Platform: ${esc(r.platform||'wisdom-gate')}</span>
       <span class="tag tag-outline">Model: ${esc(r.model||'留空')}</span></div>
     <div class="card" style="padding:10px 14px;gap:5px">
       <div style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t600)">Slug</div>
-      <code style="font-size:12px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;color:var(--t400)">${esc(r.slug||'未生成')}</code>
+      <input id="cms-review-slug" class="input" style="font-size:12px" value="${esc(r.slug||'')}">
     </div>
     <div class="field"><label>关键词 / Tags（固定 3 个）</label>
       ${[0,1,2].map((i)=>`<div class="row" style="gap:8px;margin-top:${i?'6px':'0'}"><span class="tag tag-outline" style="width:58px;text-align:center">关键词 ${i+1}</span><input id="cms-review-tag-${i}" class="input" value="${esc(tags[i]||'')}" maxlength="60"></div>`).join('')}</div>
@@ -1951,19 +1952,27 @@ async function cmsKeywordReview(){
     <div class="row" style="justify-content:flex-end;margin-top:12px;gap:8px">
       <button class="btn btn-ghost" onclick="closeModal();$('#wbtext')?.focus()">返回成稿修改</button>
       <button class="btn btn-secondary" onclick="pubModal()">返回渠道</button>
-      <button class="btn btn-primary" onclick="publishCmsReviewed()">${issues.length?'保持原样并创建 CMS 草稿':'确认并创建 CMS 草稿'}</button></div>`);
+      <button id="cms-review-submit" class="btn btn-primary" onclick="publishCmsReviewed()">${issues.length?'保持原样并创建 CMS 草稿':'确认并创建 CMS 草稿'}</button></div>`,{dismiss:false});
 }
 async function publishCmsReviewed(){
-  const title=($('#cms-review-title')?.textContent||'').trim();
-  if(!title||title==='未设置标题'){toast('标题不能为空，请先回到成稿补充标题','err');return}
+  const submit=document.querySelector('#cms-review-submit');
+  if(submit?.disabled)return;
+  const title=($('#cms-review-title')?.value||'').trim();
+  const summary=($('#cms-review-summary')?.value||'').trim();
+  const slug=($('#cms-review-slug')?.value||'').trim();
+  if(!title){toast('标题不能为空，请先填写 Title','err');return}
+  if(!summary){toast('Summary 不能为空，请先填写摘要','err');return}
+  if(summary.length>240){toast('Summary 不能超过 240 个字符','err');return}
+  if(!slug){toast('Slug 不能为空，请先填写 Slug','err');return}
   const tags=[0,1,2].map(i=>($('#cms-review-tag-'+i)?.value||'').trim());
   if(tags.some(x=>!x)){toast('请填写完整的 3 个关键词标签','err');return}
   if(new Set(tags.map(x=>x.toLowerCase())).size!==3){toast('3 个关键词不能重复','err');return}
   if(tags.some(x=>x.length>60)){toast('每个关键词不能超过 60 个字符','err');return}
+  if(submit){submit.disabled=true;submit.textContent='正在创建 CMS 草稿…'}
   const rel='content/'+WB.cur.path;
-  const r=await post('/api/publish/'+SLUG,{platform:'wisgate_cms',path:rel,title,options:{tags}});
+  const r=await post('/api/publish/'+SLUG,{platform:'wisgate_cms',path:rel,title,options:{summary,slug,tags}});
   toast(r.ok?('已创建 CMS 草稿'+(r.url?'：'+r.url:'')):('发布失败：'+(r.error||'')),r.ok?'':'err');
-  PUB=null;if(r.ok)pubModal();
+  PUB=null;if(r.ok)pubModal(); else if(submit){submit.disabled=false;submit.textContent='确认并创建 CMS 草稿'}
 }
 async function wbSave(){
   WB.text=$('#wbtext').value;

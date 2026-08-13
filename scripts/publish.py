@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import os
 import re
@@ -223,14 +224,22 @@ def _cms_plaintext(markdown: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def _cms_reader_text(markdown: str) -> str:
+    """Remove GeoLook metadata so CMS metadata only reflects reader copy."""
+    value = str(markdown or "").replace("\ufeff", "")
+    value = re.sub(r"<!--.*?-->", "", value, flags=re.S)
+    value = re.sub(r"\A\s*---\s*\n.*?\n---\s*(?:\n|\Z)", "", value, count=1, flags=re.S)
+    return value.strip()
+
+
 def _cms_summary(markdown: str, title: str) -> str:
     """Use the first reader-facing paragraph as concise CMS summary metadata."""
-    text = re.sub(r"<!--.*?-->", "", markdown, flags=re.S)
-    text = re.sub(r"^---\s*$.*?^---\s*$", "", text, flags=re.M | re.S)
+    text = _cms_reader_text(markdown)
     paragraphs = re.split(r"\n\s*\n", text)
     for paragraph in paragraphs:
         candidate = paragraph.strip()
-        if not candidate or candidate.startswith("#") or candidate.startswith("|"):
+        if (not candidate or candidate.startswith("#") or candidate.startswith("|")
+                or re.fullmatch(r"[-*_]{3,}", candidate)):
             continue
         candidate = _cms_plaintext(candidate)
         if candidate:
@@ -359,6 +368,22 @@ def _cms_error(exc_or_response, token: str = "") -> str:
     return msg.replace("Authorization", "authorization")
 
 
+def _cms_error_code(response) -> str:
+    """Read a Directus validation code without exposing the rejected value."""
+    try:
+        payload = response.json() or {}
+    except (ValueError, TypeError):
+        return ""
+    errors = payload.get("errors") if isinstance(payload, dict) else None
+    if isinstance(errors, list):
+        for item in errors:
+            if isinstance(item, dict):
+                ext = item.get("extensions")
+                if isinstance(ext, dict) and ext.get("code"):
+                    return str(ext["code"]).strip().upper()
+    return ""
+
+
 def _cms_preview(cfg: dict, text: str, title: str, fname: str) -> dict:
     cms_markdown = _cms_markdown(text)
     return {
@@ -409,8 +434,14 @@ def _pub_wisgate_cms(cfg, text, title, fname, options=None):
         return {"ok": False, "error": "tags_format 只能是 json 或 csv"}
     token = os.environ["WISGATE_CMS_TOKEN"]
     options = options if isinstance(options, dict) else {}
+    title = _clean_title(title)
+    if not title:
+        return {"ok": False, "error": "无法从成稿提取标题；请先添加 Markdown H1 或在发布预览中填写标题"}
     cms_markdown = _cms_markdown(text)
-    slug_value = _cms_slug(title, fname)
+    slug_value = _cms_slug(str(options.get("slug") or title), fname)
+    summary = _cms_plaintext(str(options.get("summary") or ""))[:240].rstrip(" ,;:-")
+    if not summary:
+        summary = _cms_summary(text, title)
     if "tags" in options:
         tags = _cms_tag_list(options.get("tags"))
         if len(tags) != 3:
@@ -422,12 +453,15 @@ def _pub_wisgate_cms(cfg, text, title, fname, options=None):
         body_field: cms_markdown,
         slug_field: slug_value,
         status_field: str(cfg.get("draft_value") or "draft").strip() or "draft",
-        summary_field: _cms_summary(text, title),
+        summary_field: summary,
         publish_time_field: G.now_iso(),
         tags_field: tags if tags_format == "json" else ", ".join(tags),
         platform_field: str(cfg.get("platform_value") or "wisdom-gate").strip() or "wisdom-gate",
     }
-    # WisGate CMS requires this canonical field even when a custom mapping is used.
+    # WisGate CMS requires these canonical fields even when a legacy/custom
+    # mapping remains in local configuration. Otherwise a value written only
+    # to e.g. `headline` appears as an empty title in the CMS list view.
+    body["title"] = title
     body["slug"] = slug_value
     cover_image = str(cfg.get("cover_image_value") or "").strip()
     if cover_image:
@@ -436,11 +470,30 @@ def _pub_wisgate_cms(cfg, text, title, fname, options=None):
     if str(cfg.get("model_value") or "").strip():
         body[model_field] = str(cfg["model_value"]).strip()
     url = f"{base}/items/{collection}"
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/json",
+               "Content-Type": "application/json"}
     try:
-        r = requests.post(url, headers={"Authorization": f"Bearer {token}",
-                                        "Accept": "application/json",
-                                        "Content-Type": "application/json"},
-                          json=body, timeout=30)
+        r = requests.post(url, headers=headers, json=body, timeout=30)
+        # A second click or a regenerated article can reuse the same reviewed
+        # slug. Keep the requested slug for the first attempt, then create a
+        # deterministic, human-readable unique draft slug only for Directus's
+        # explicit uniqueness error.
+        if r.status_code not in (200, 201) and _cms_error_code(r) == "RECORD_NOT_UNIQUE":
+            stamp = re.sub(r"[^0-9]", "", G.now_iso())[:14]
+            base_slug = re.sub(r"-+", "-", slug_value).strip("-")[:220].rstrip("-")
+            retry_slug = f"{base_slug}-{stamp}" if base_slug else f"geolook-{stamp}"
+            retry_body = dict(body)
+            retry_body[slug_field] = retry_slug
+            retry_body["slug"] = retry_slug
+            body = retry_body
+            r = requests.post(url, headers=headers, json=retry_body, timeout=30)
+            if r.status_code in (200, 201):
+                retry_note = f"原 Slug 已存在，已自动改为唯一 Slug：{retry_slug}"
+            else:
+                retry_note = ""
+        else:
+            retry_note = ""
     except requests.RequestException as exc:
         return {"ok": False, "error": _cms_error(exc, token)}
     if r.status_code not in (200, 201):
@@ -457,8 +510,11 @@ def _pub_wisgate_cms(cfg, text, title, fname, options=None):
     admin_url = f"{base}/admin/content/{collection}"
     if item_id is not None:
         admin_url += f"/{item_id}"
-    return {"ok": True, "url": admin_url,
-            "note": "已导入为 CMS 草稿，请在后台核对后再发布"}
+    note = "已导入为 CMS 草稿，请在后台核对后再发布"
+    if retry_note:
+        note += "；" + retry_note
+    return {"ok": True, "url": admin_url, "note": note, "slug": body.get("slug", slug_value),
+            "status": body.get(status_field, "draft")}
 
 
 _IMPL = {"github": _pub_github, "wordpress": _pub_wordpress,
@@ -479,9 +535,49 @@ def _read_source(slug: str, rel: str) -> tuple[str, str]:
     return target.read_text("utf-8"), target.name
 
 
-def _title_of(text: str, fname: str) -> str:
-    m = re.search(r"^#\s+(.+)$", text, re.M)
-    return m.group(1).strip() if m else fname.rsplit(".", 1)[0]
+def _clean_title(value: str) -> str:
+    """Turn a Markdown or HTML heading into a compact CMS title."""
+    value = html.unescape(str(value or "")).replace("\ufeff", "").strip()
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", value)
+    value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
+    value = re.sub(r"[`*_~]+", "", value)
+    value = re.sub(r"\s+", " ", value).strip(" -:|#")
+    return value[:255].rstrip()
+
+
+def _title_of(text: str, fname: str, slug: str = "") -> str:
+    """Extract a reader-facing title from GeoLook drafts and imported files.
+
+    Generated drafts can begin with a BOM, editorial comments, or YAML
+    frontmatter. Imported content may use HTML headings. All of those forms
+    must resolve to the same title before the CMS request is built.
+    """
+    source = str(text or "").replace("\ufeff", "")
+    source = re.sub(r"<!--.*?-->", "", source, flags=re.S).lstrip()
+    source = re.sub(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", "", source, count=1, flags=re.S)
+    markdown = re.search(r"^\s{0,3}#(?!#)\s+(.+?)\s*$", source, re.M)
+    if markdown:
+        title = _clean_title(markdown.group(1))
+        if title:
+            return title
+    heading = re.search(r"<h[12]\b[^>]*>(.*?)</h[12]>", source, re.I | re.S)
+    if heading:
+        title = _clean_title(heading.group(1))
+        if title:
+            return title
+    # A question-bank label is a useful recovery path for malformed imported
+    # files. It is far more useful in a CMS list than an internal q123 filename.
+    question_id = re.search(r"\bq\d+\b", fname, re.I)
+    if slug and question_id:
+        for question in G.load_config(slug).get("questions") or []:
+            if str(question.get("id") or "").casefold() == question_id.group(0).casefold():
+                title = _clean_title(question.get("text") or question.get("question") or "")
+                if title:
+                    return title
+    # A filename is still preferable to an empty CMS title when no question
+    # mapping exists, and makes an incomplete import easy to find and correct.
+    return _clean_title(fname.rsplit(".", 1)[0])
 
 
 def records(slug: str) -> list[dict]:
@@ -496,7 +592,7 @@ def preview(slug: str, code: str, rel: str, title: str = "") -> dict:
         text, fname = _read_source(slug, rel)
     except (ValueError, FileNotFoundError):
         return {"ok": False, "error": f"文件不可用：{rel}"}
-    title = title or _title_of(text, fname)
+    title = title or _title_of(text, fname, slug)
     if code == "wisgate_cms":
         data = _cms_preview(_cfg(slug, code), text, title, fname)
         # Re-run lint for the exact final being published. The aggregate draft
@@ -521,7 +617,7 @@ def publish(slug: str, code: str, rel: str, title: str = "", options=None) -> di
         text, fname = _read_source(slug, rel)
     except (ValueError, FileNotFoundError):
         return {"ok": False, "error": f"文件不可用：{rel}"}
-    title = title or _title_of(text, fname)
+    title = title or _title_of(text, fname, slug)
     if code == "wisgate_cms":
         res = _IMPL[code](_cfg(slug, code), text, title, fname, options)
     else:
